@@ -1,4 +1,12 @@
-"""Streamlit UI event handler orchestrating domain-specific managers."""
+"""Streamlit UI event handler orchestrating domain-specific managers.
+
+This module provides the main UI event handler that coordinates
+specialized UI managers for different event types including:
+- Message streaming and rendering
+- Chain of Thought processing
+- Tool execution visualization
+- Reasoning process display
+"""
 
 from __future__ import annotations
 
@@ -6,7 +14,7 @@ from typing import Any, Dict, Iterable
 
 import streamlit as st
 
-from .event_handlers import EventHandler, EventType
+from .registry import EventHandler, EventType
 from .ui import (
     COTUIManager,
     MessageUIManager,

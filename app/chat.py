@@ -1,11 +1,14 @@
-"""Chat handling logic for Streamlit."""
+"""Chat handling logic for Streamlit.
+
+This module manages chat interactions, user input processing,
+and streaming response handling with the agent backend.
+"""
 
 from typing import Dict, Any
 import streamlit as st
 
-from .session_manager import SessionManager
-from .utils.placeholder_manager import PlaceholderManager
-from .utils.error_handler import ErrorHandler
+from .session import SessionManager
+from .ui import PlaceholderManager, ErrorHandler
 
 
 class ChatHandler:

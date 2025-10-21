@@ -1,4 +1,11 @@
-"""Application configuration settings."""
+"""Application configuration settings.
+
+This module provides centralized configuration management including:
+- Streamlit page configuration
+- Available AI models and default selection
+- UI settings (titles, placeholders)
+- Agent factory configuration and validation
+"""
 
 from dataclasses import dataclass, field
 from typing import Dict, List, Any, Optional, Callable

@@ -1,8 +1,15 @@
-"""Lifecycle and logging-related event handlers."""
+"""Lifecycle and logging-related event handlers.
+
+This module provides event handlers for:
+- LifecycleHandler: Application lifecycle events
+- ReasoningHandler: Reasoning process events
+- LoggingHandler: Structured event logging
+- DebugHandler: Debug information collection
+"""
 from typing import Any, Dict, Optional
 import os
 
-from .event_handlers import EventHandler, EventType
+from .registry import EventHandler, EventType
 
 
 class LifecycleHandler(EventHandler):

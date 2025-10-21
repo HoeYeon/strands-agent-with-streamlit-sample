@@ -11,14 +11,14 @@ if str(PROJECT_ROOT) not in sys.path:
 
 pytest.importorskip("strands")
 
-from agents.bedrock_agent import BedrockAgent
-from handlers import ui_handlers as ui_handlers_module
-from handlers.ui_handlers import StreamlitUIHandler, StreamlitUIState
-from handlers.ui import messages as messages_module
-from handlers.ui import placeholders as placeholders_module
-from handlers.ui import reasoning as reasoning_module
-from handlers.ui import tools as tools_module
-from handlers.ui import utils as utils_module
+from agents.strands_agent import StrandsAgent
+from app.events import handlers as ui_handlers_module
+from app.events.handlers import StreamlitUIHandler, StreamlitUIState
+from app.events.ui import messages as messages_module
+from app.events.ui import placeholders as placeholders_module
+from app.events.ui import reasoning as reasoning_module
+from app.events.ui import tools as tools_module
+from app.events.ui import utils as utils_module
 
 
 class MockPlaceholder:
@@ -298,12 +298,12 @@ class TestStreamlitUIHandler:
         assert self.response_placeholder.markdown_calls[-1] == "Final answer"
 
 
-class TestBedrockAgentIntegration:
-    """Integration-style tests around BedrockAgent."""
+class TestStrandsAgentIntegration:
+    """Integration-style tests around StrandsAgent."""
     
     def setup_method(self):
         """Instantiate the agent for each test."""
-        self.agent = BedrockAgent()
+        self.agent = StrandsAgent()
     
     def test_ui_state_persistence(self):
         """The agent should reuse the same UI state instance."""
@@ -370,7 +370,7 @@ class TestEventRegistry:
     
     def test_event_type_extraction(self):
         """Event type extraction should respect the priority order."""
-        from handlers.event_handlers import EventRegistry
+        from app.events.registry import EventRegistry
         
         registry = EventRegistry()
         
@@ -389,7 +389,7 @@ if __name__ == "__main__":
         test_classes = [
             TestStreamlitUIState,
             TestStreamlitUIHandler, 
-            TestBedrockAgentIntegration,
+            TestStrandsAgentIntegration,
             TestEventRegistry
         ]
         

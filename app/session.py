@@ -1,4 +1,10 @@
-"""Streamlit session state management."""
+"""Streamlit session state management.
+
+This module manages the Streamlit session state including:
+- Chat message history
+- Current agent instance
+- Model selection and switching
+"""
 
 from typing import List, Dict, Any, Optional
 import streamlit as st

@@ -3,9 +3,9 @@
 from typing import Optional
 
 from .config import AppConfig
-from .session_manager import SessionManager
-from .ui_manager import UIManager
-from .chat_handler import ChatHandler
+from .session import SessionManager
+from .ui import UIManager
+from .chat import ChatHandler
 
 
 class StreamlitChatApp:

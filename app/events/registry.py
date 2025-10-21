@@ -1,4 +1,10 @@
-"""Event handler architecture for streaming callbacks."""
+"""Event handler architecture for streaming callbacks.
+
+This module provides the core event handling system including:
+- EventType: Enumeration of supported event types
+- EventHandler: Abstract base class for event handlers
+- EventRegistry: Event routing and handler management
+"""
 from abc import ABC, abstractmethod
 from enum import Enum
 from typing import Any, Dict, List, Optional

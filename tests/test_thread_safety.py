@@ -13,7 +13,7 @@ import pytest
 
 pytest.importorskip("strands")
 
-from handlers.ui_handlers import StreamlitUIHandler, StreamlitUIState
+from app.events.handlers import StreamlitUIHandler, StreamlitUIState
 
 
 def test_streamlit_handler_without_context():
@@ -69,8 +69,8 @@ def test_handler_in_worker_thread():
 
 def test_event_registry_error_handling():
     """Confirm that handler exceptions are surfaced as structured results."""
-    from handlers.event_handlers import EventRegistry
-    from handlers.ui_handlers import StreamlitUIHandler, StreamlitUIState
+    from app.events.registry import EventRegistry
+    from app.events.handlers import StreamlitUIHandler, StreamlitUIState
     
     registry = EventRegistry()
     ui_state = StreamlitUIState()
@@ -124,12 +124,12 @@ def test_generator_cleanup():
     # Ensure the finally block executed
     assert len(cleanup_called) > 0, "Expected finally block to run"
 
-    # Inspect BedrockAgent to confirm the try/finally pattern exists
+    # Inspect StrandsAgent to confirm the try/finally pattern exists
     import inspect
-    from agents.bedrock_agent import BedrockAgent
+    from agents.strands_agent import StrandsAgent
     
-    source = inspect.getsource(BedrockAgent.stream_response)
-    assert "try:" in source and "finally:" in source, "BedrockAgent.stream_response is missing try/finally"
+    source = inspect.getsource(StrandsAgent.stream_response)
+    assert "try:" in source and "finally:" in source, "StrandsAgent.stream_response is missing try/finally"
 
 
 if __name__ == "__main__":

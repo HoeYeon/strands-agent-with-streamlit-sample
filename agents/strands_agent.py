@@ -1,3 +1,14 @@
+"""Strands Agent integration with event-driven streaming.
+
+This module provides the StrandsAgent class that integrates the Strands
+Agent framework with the Streamlit frontend through an event-driven
+architecture. It handles:
+- Agent initialization and configuration
+- Event streaming and queue management
+- Event handler registration and coordination
+- Tool definitions (calculator, weather)
+"""
+
 import queue
 import threading
 import time
@@ -7,14 +18,14 @@ from strands import Agent
 from strands.models import BedrockModel
 from strands.tools import tool
 
-from handlers.event_handlers import EventRegistry, EventType
-from handlers.lifecycle_handlers import (
+from app.events.registry import EventRegistry, EventType
+from app.events.lifecycle import (
     DebugHandler,
     LifecycleHandler,
     LoggingHandler,
     ReasoningHandler,
 )
-from handlers.ui_handlers import StreamlitUIHandler, StreamlitUIState
+from app.events.handlers import StreamlitUIHandler, StreamlitUIState
 
 @tool
 def calculator(expression: str) -> str:

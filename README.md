@@ -147,18 +147,15 @@ Complex calculation: "Please calculate 1+100"
 | `ToolUIManager` | Tool execution status and result display |
 | `ReasoningUIManager` | Reasoning process status widget management |
 
-#### New UI Layer (Refactored Structure)
+#### UI Layer Components
 
 | Component | Role | Lines |
 |-----------|------|-------|
 | `StreamlitChatApp` | Main application class | 29 lines |
-| `AppConfig` | Centralized configuration management | 46 lines |
-| `SessionManager` | Streamlit session state management | 71 lines |
-| `UIManager` | UI component rendering | 44 lines |
-| `ChatHandler` | Chat logic and streaming processing | 74 lines |
-| `MessageRenderer` | Message rendering logic | 41 lines |
-| `PlaceholderManager` | Placeholder creation/management | 31 lines |
-| `ErrorHandler` | Integrated error handling | 33 lines |
+| `AppConfig` | Centralized configuration management | 166 lines |
+| `SessionManager` | Session state management | 80 lines |
+| `UIManager` | UI component rendering and utilities | 60 lines |
+| `ChatHandler` | Chat logic and streaming processing | 90 lines |
 
 ## 📁 Project Structure
 
@@ -168,40 +165,34 @@ strands-agent-with-streamlit-sample/
 ├── pyproject.toml                     # Project configuration
 ├── requirements.txt                   # Python dependencies (optional)
 ├── uv.lock                           # UV lock file
-├──
-├── app/                              # 🆕 Streamlit UI Layer
+│
+├── app/                              # Streamlit UI Layer
 │   ├── __init__.py
 │   ├── main.py                       # StreamlitChatApp class
 │   ├── config.py                     # Centralized configuration management
 │   ├── env_loader.py                 # Environment variable loading (.env support)
-│   ├── session_manager.py            # Streamlit session state management
-│   ├── ui_manager.py                 # UI component rendering
-│   ├── chat_handler.py               # Chat logic and streaming processing
-│   └── utils/                        # UI utility modules
+│   ├── session.py                    # Streamlit session state management
+│   ├── ui.py                         # Consolidated UI components and utilities
+│   ├── chat.py                       # Chat logic and streaming processing
+│   └── events/                       # Event processing layer
 │       ├── __init__.py
-│       ├── message_renderer.py       # Message rendering logic
-│       ├── placeholder_manager.py    # Streamlit placeholder management
-│       └── error_handler.py          # Integrated error handling
+│       ├── registry.py               # Event handler architecture
+│       ├── lifecycle.py              # Lifecycle/logging handlers
+│       ├── handlers.py               # Streamlit UI dedicated handlers
+│       └── ui/                       # UI manager modules
+│           ├── __init__.py
+│           ├── cot.py                # Chain of Thought processing
+│           ├── messages.py           # Message streaming
+│           ├── reasoning.py          # Reasoning process display
+│           ├── state.py              # UI state management
+│           ├── tools.py              # Tool execution display
+│           ├── utils.py              # Utility functions
+│           └── placeholders.py       # Placeholder utilities
 │
-├── agents/                           # Business logic layer (maintained)
+├── agents/                           # Business logic layer
 │   └── strands_agent.py              # Strands Agent integration and coordination
 │
-├── handlers/                         # Event processing layer (maintained)
-│   ├── __init__.py
-│   ├── event_handlers.py             # Event handler architecture
-│   ├── lifecycle_handlers.py         # Lifecycle/logging handlers
-│   ├── ui_handlers.py                # Streamlit UI dedicated handlers
-│   └── ui/                          # UI manager modules
-│       ├── __init__.py
-│       ├── cot.py                   # Chain of Thought processing
-│       ├── messages.py              # Message streaming
-│       ├── reasoning.py             # Reasoning process display
-│       ├── state.py                 # UI state management
-│       ├── tools.py                 # Tool execution display
-│       ├── utils.py                 # Utility functions
-│       └── placeholders.py          # Placeholder utilities
-│
-├── env/                              # 🆕 Environment variable settings
+├── env/                              # Environment variable settings
 │   └── local.env                     # Sample environment variable file
 │
 ├── tests/
@@ -240,9 +231,9 @@ pytest tests -v
 - **Code Style**: Follow PEP 8
 
 #### Architecture
-- **Layer Separation**: UI layer (`app/`) should only use event processing layer (`handlers/`)
+- **Layer Separation**: UI layer (`app/`) contains event processing layer (`app/events/`)
 - **Configuration Centralization**: Add new settings to `AppConfig`
-- **Error Handling**: Use integrated error handling through `ErrorHandler`
+- **Error Handling**: Use integrated error handling through UI utilities
 
 #### Testing
 - Submit new components with tests
