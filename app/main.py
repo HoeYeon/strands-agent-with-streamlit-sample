@@ -1,5 +1,7 @@
 """Main Streamlit chat application."""
 
+from typing import Optional
+
 from .config import AppConfig
 from .session_manager import SessionManager
 from .ui_manager import UIManager
@@ -9,9 +11,14 @@ from .chat_handler import ChatHandler
 class StreamlitChatApp:
     """Main Streamlit chat application class."""
 
-    def __init__(self):
-        self.config = AppConfig()
-        self.session_manager = SessionManager()
+    def __init__(self, config: Optional[AppConfig] = None):
+        """Initialize StreamlitChatApp with optional configuration.
+        
+        Args:
+            config: Optional AppConfig instance. If not provided, uses default configuration.
+        """
+        self.config = config or AppConfig()
+        self.session_manager = SessionManager(self.config)
         self.ui_manager = UIManager(self.config)
         self.chat_handler = ChatHandler(self.session_manager)
 
