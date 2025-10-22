@@ -11,11 +11,9 @@ from typing import List, Dict, Any, Tuple
 import streamlit as st
 
 from .config import AppConfig
-from app.events.handlers import (
-    parse_model_response,
-    render_chain_of_thought,
-    render_tool_calls,
-)
+from agents.events.ui.utils import parse_model_response
+from agents.events.ui.messages import render_chain_of_thought
+from agents.events.ui.tools import render_tool_calls
 
 
 class UIManager:

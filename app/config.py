@@ -49,9 +49,11 @@ class AppConfig:
         if self.available_models is None:
             self.available_models = [
                 "us.amazon.nova-pro-v1:0",
+                "us.amazon.nova-premier-v1:0",
                 "us.anthropic.claude-sonnet-4-20250514-v1:0",
-                "openai.gpt-oss-120b-1:0",
-                "openai.gpt-oss-20b-1:0",
+                "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+                "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+                "openai.gpt-oss-120b-1:0"
             ]
 
         # Override default model from environment if specified
@@ -127,6 +129,9 @@ class AppConfig:
         # Validate the created agent has required interface
         self._validate_agent_interface(agent_instance)
         
+        # Register the StreamlitUIHandler for UI event processing
+        self._register_ui_handler(agent_instance)
+        
         return agent_instance
     
     def _validate_agent_interface(self, agent_instance: Any) -> None:
@@ -172,3 +177,18 @@ class AppConfig:
                 f"{'; '.join(error_parts)}. "
                 f"Required interface: stream_response(), get_ui_state(), event_registry attribute."
             )
+    
+    def _register_ui_handler(self, agent_instance: Any) -> None:
+        """Register the StreamlitUIHandler with the agent's event registry.
+        
+        Args:
+            agent_instance: The agent instance to register the UI handler with
+        """
+        from app.events.handlers import StreamlitUIHandler
+        
+        # Get the UI state from the agent
+        ui_state = agent_instance.get_ui_state()
+        
+        # Create and register the StreamlitUIHandler
+        ui_handler = StreamlitUIHandler(ui_state)
+        agent_instance.event_registry.register(ui_handler)

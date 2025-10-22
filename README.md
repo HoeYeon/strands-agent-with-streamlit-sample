@@ -113,6 +113,51 @@ Complex calculation: "Please calculate 1+100"
 
 ## 🏛️ Architecture
 
+### Layer Separation
+
+The application follows a clean separation between the agent layer and frontend layer, with shared event infrastructure enabling communication between them:
+
+```
+┌─────────────────────────────────────────┐
+│         Shared Event Infrastructure     │
+│                                         │
+│  agents/events/                         │
+│  ├── registry.py    (EventRegistry)     │
+│  ├── lifecycle.py   (Handlers)          │
+│  └── ui/            (UI State & Mgrs)   │
+└─────────────────────────────────────────┘
+         ▲                    ▲
+         │                    │
+         │ imports            │ imports
+         │                    │
+┌────────┴──────┐    ┌────────┴──────────┐
+│ Strands Agent │    │ Streamlit Frontend│
+│ (agents/)     │    │ (app/)            │
+│               │    │                   │
+│ - Agent logic │    │ - UI rendering    │
+│ - Event emit  │    │ - User interaction│
+└───────────────┘    └───────────────────┘
+```
+
+**Key Design Principles:**
+- **Separation of Concerns**: Agent handles AI logic, frontend handles UI rendering
+- **Shared Infrastructure**: Event system (`agents/events/`) is accessible to both layers
+- **No Circular Dependencies**: Agent layer never imports from `app/` directory
+- **Event-Driven Communication**: All data flows through the event system
+
+### Event Infrastructure Location
+
+The event infrastructure lives in `agents/events/` to serve as shared communication layer:
+
+- **`agents/events/registry.py`**: Core event routing and handler management
+- **`agents/events/lifecycle.py`**: Lifecycle and logging event handlers
+- **`agents/events/ui/`**: UI state management and rendering managers
+  - `state.py`: StreamlitUIState for UI-specific state
+  - `messages.py`, `cot.py`, `reasoning.py`, `tools.py`: UI managers
+  - `utils.py`, `placeholders.py`: UI utilities
+
+This location allows both the agent and frontend to import event infrastructure without creating circular dependencies.
+
 ### Core Components
 
 ```
@@ -174,11 +219,17 @@ strands-agent-with-streamlit-sample/
 │   ├── session.py                    # Streamlit session state management
 │   ├── ui.py                         # Consolidated UI components and utilities
 │   ├── chat.py                       # Chat logic and streaming processing
-│   └── events/                       # Event processing layer
+│   └── events/                       # Frontend-specific event handlers
+│       ├── __init__.py
+│       └── handlers.py               # Streamlit UI dedicated handlers
+│
+├── agents/                           # Agent Layer
+│   ├── __init__.py
+│   ├── strands_agent.py              # Strands Agent integration and coordination
+│   └── events/                       # Shared event infrastructure
 │       ├── __init__.py
 │       ├── registry.py               # Event handler architecture
 │       ├── lifecycle.py              # Lifecycle/logging handlers
-│       ├── handlers.py               # Streamlit UI dedicated handlers
 │       └── ui/                       # UI manager modules
 │           ├── __init__.py
 │           ├── cot.py                # Chain of Thought processing
@@ -188,9 +239,6 @@ strands-agent-with-streamlit-sample/
 │           ├── tools.py              # Tool execution display
 │           ├── utils.py              # Utility functions
 │           └── placeholders.py       # Placeholder utilities
-│
-├── agents/                           # Business logic layer
-│   └── strands_agent.py              # Strands Agent integration and coordination
 │
 ├── env/                              # Environment variable settings
 │   └── local.env                     # Sample environment variable file

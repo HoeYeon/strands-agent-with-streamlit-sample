@@ -32,8 +32,21 @@ class LifecycleHandler(EventHandler):
         return event_type in lifecycle_events
     
     def handle(self, event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Process a lifecycle event and return metadata."""
-        event_type = next(iter(event.keys()))
+        """Process a lifecycle event and return metadata.
+        
+        Handles both standard format events (with "type" field) and legacy events.
+        Standard format events:
+        - {"type": "start"} - Agent execution starting
+        - {"type": "complete", "result": "..."} - Agent execution completed
+        
+        Legacy events are preserved and handled as before.
+        """
+        # Check for standard format first
+        event_type = event.get("type")
+        
+        # If no type field, extract from legacy format
+        if not event_type:
+            event_type = next(iter(event.keys()))
 
         return {"lifecycle_processed": event_type}
 

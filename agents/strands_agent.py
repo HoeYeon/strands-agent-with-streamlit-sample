@@ -18,14 +18,14 @@ from strands import Agent
 from strands.models import BedrockModel
 from strands.tools import tool
 
-from app.events.registry import EventRegistry, EventType
-from app.events.lifecycle import (
+from agents.events.registry import EventRegistry, EventType
+from agents.events.lifecycle import (
     DebugHandler,
     LifecycleHandler,
     LoggingHandler,
     ReasoningHandler,
 )
-from app.events.handlers import StreamlitUIHandler, StreamlitUIState
+from agents.events.ui import StreamlitUIState
 
 @tool
 def calculator(expression: str) -> str:
@@ -61,8 +61,7 @@ class StrandsAgent:
         )
     
     def _setup_handlers(self):
-        """Register handlers in priority order."""
-        self.event_registry.register(StreamlitUIHandler(self.ui_state))
+        """Register core handlers (non-UI handlers)."""
         self.event_registry.register(LifecycleHandler())
         self.event_registry.register(ReasoningHandler())
         self.event_registry.register(LoggingHandler(log_level="INFO"))
@@ -118,15 +117,18 @@ class StrandsAgent:
         def run_agent():
             try:
                 result = self.agent(user_input)
-                self.event_queue.put({"result": result})
+                self.event_queue.put({"type": "complete", "result": result})
             except Exception as e:
-                self.event_queue.put({"force_stop": True, "force_stop_reason": str(e)})
+                self.event_queue.put({"type": "force_stop", "reason": str(e)})
         
         # Run the agent call in a background thread
         thread = threading.Thread(target=run_agent)
         thread.start()
 
         try:
+            # Emit start event at the beginning
+            yield {"type": "start"}
+            
             # Yield events as they arrive from the queue
             start_time = time.time()
 
@@ -138,7 +140,7 @@ class StrandsAgent:
                     yield event
 
                     # Stop once the agent reports completion or a forced stop
-                    if event.get("result") or event.get("force_stop"):
+                    if event.get("type") in ("complete", "force_stop"):
                         break
 
                 except queue.Empty:
@@ -149,7 +151,7 @@ class StrandsAgent:
 
                     # Abort if the agent is unresponsive for too long
                     if elapsed > 60:
-                        timeout_event = {"force_stop": True, "force_stop_reason": "Timeout"}
+                        timeout_event = {"type": "force_stop", "reason": "Timeout"}
                         yield timeout_event
                         break
 

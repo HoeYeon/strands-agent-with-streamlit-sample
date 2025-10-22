@@ -14,8 +14,8 @@ from typing import Any, Dict, Iterable
 
 import streamlit as st
 
-from .registry import EventHandler, EventType
-from .ui import (
+from agents.events.registry import EventHandler, EventType
+from agents.events.ui import (
     COTUIManager,
     MessageUIManager,
     ReasoningUIManager,

@@ -72,14 +72,60 @@ class EventRegistry:
         """Return handlers that can process the given event type."""
         return [h for h in self._handlers if h.can_handle(event_type)]
     
+    def _normalize_event(self, event: Dict[str, Any]) -> Dict[str, Any]:
+        """Convert legacy events to standard format.
+        
+        Normalization rules:
+        1. {"result": "..."} → {"type": "complete", "result": "..."}
+        2. {"force_stop": True, "force_stop_reason": "..."} → {"type": "force_stop", "reason": "..."}
+        3. All other events (data, delta, current_tool_use, etc.) are preserved as-is
+        
+        Args:
+            event: The event dictionary to normalize
+            
+        Returns:
+            Normalized event dictionary (may be the same as input for legacy Strands events)
+        """
+        # Already standard format with type field
+        if "type" in event:
+            return event
+        
+        # Legacy completion: {"result": "..."}
+        if "result" in event and len(event) == 1:
+            return {"type": "complete", "result": event["result"]}
+        
+        # Legacy force stop: {"force_stop": True, "force_stop_reason": "..."}
+        if "force_stop" in event:
+            return {
+                "type": "force_stop",
+                "reason": event.get("force_stop_reason", "Unknown")
+            }
+        
+        # Legacy Strands events - preserve as-is for existing handlers
+        # (data, delta, current_tool_use, tool_result, reasoningText, redactedContent, etc.)
+        return event
+    
     def process_event(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Dispatch an event and collect handler outputs."""
+        """Dispatch an event and collect handler outputs.
+        
+        Events are normalized before processing to convert legacy formats
+        to standard format while preserving Strands-specific events.
+        
+        Args:
+            event: The event dictionary to process
+            
+        Returns:
+            List of results from handlers
+        """
         results = []
-        event_type = self._extract_event_type(event)
+        # Normalize event (creates copy for legacy completion events, preserves others)
+        normalized_event = self._normalize_event(event)
+        event_type = self._extract_event_type(normalized_event)
         
         for handler in self.get_handlers(event_type):
             try:
-                result = handler.handle(event)
+                # Pass normalized event to handlers
+                result = handler.handle(normalized_event)
                 if result:
                     results.append(result)
             except Exception as e:
@@ -98,7 +144,21 @@ class EventRegistry:
         return results
     
     def _extract_event_type(self, event: Dict[str, Any]) -> str:
-        """Infer the event type from the payload."""
+        """Infer the event type from the payload.
+        
+        Handles both standard format (with "type" field) and legacy formats.
+        
+        Args:
+            event: The event dictionary
+            
+        Returns:
+            The event type as a string
+        """
+        # Standard format: check for "type" field first
+        if "type" in event:
+            return event["type"]
+        
+        # Legacy format: Priority-based detection
         # Priority: data > current_tool_use > reasoningText > fallback to first key
         priority_events = ["data", "current_tool_use", "tool_result", "reasoning", "reasoningText", "redactedContent", "result", "force_stop"]
         

@@ -43,3 +43,8 @@ Thumbs.db
 
 # Local configuration
 *.local
+
+# IDE and AI Assistant directories
+.kiro/
+.amazonq/
+.claude/

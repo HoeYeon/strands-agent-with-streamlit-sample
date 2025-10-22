@@ -62,6 +62,22 @@ class ChatHandler:
             )
             self.session_manager.add_message("assistant", assistant_message)
 
+    def _is_stream_complete(self, event: Dict[str, Any]) -> bool:
+        """Check if event signals stream completion.
+        
+        Supports both standard format (type: complete/force_stop) and
+        legacy format (result/force_stop fields).
+        """
+        # Standard format
+        if event.get("type") in ("complete", "force_stop"):
+            return True
+        
+        # Legacy format (backward compatibility)
+        if event.get("result") or event.get("force_stop"):
+            return True
+        
+        return False
+
     def _stream_response(self, prompt: str, agent, status_ph, chain_ph, response_ph) -> None:
         """Stream the agent response and handle events."""
         # Stream events and process them
@@ -79,7 +95,7 @@ class ChatHandler:
                 self.error_handler.display_handler_error(handler_error, status_ph)
 
             # Stop streaming once the agent reports completion
-            if event.get("result") or event.get("force_stop"):
+            if self._is_stream_complete(event):
                 break
 
         # Finalize and persist the response

@@ -13,7 +13,8 @@ import pytest
 
 pytest.importorskip("strands")
 
-from app.events.handlers import StreamlitUIHandler, StreamlitUIState
+from agents.events.ui import StreamlitUIState
+from app.events.handlers import StreamlitUIHandler
 
 
 def test_streamlit_handler_without_context():
@@ -69,8 +70,9 @@ def test_handler_in_worker_thread():
 
 def test_event_registry_error_handling():
     """Confirm that handler exceptions are surfaced as structured results."""
-    from app.events.registry import EventRegistry
-    from app.events.handlers import StreamlitUIHandler, StreamlitUIState
+    from agents.events.registry import EventRegistry
+    from agents.events.ui import StreamlitUIState
+    from app.events.handlers import StreamlitUIHandler
     
     registry = EventRegistry()
     ui_state = StreamlitUIState()
