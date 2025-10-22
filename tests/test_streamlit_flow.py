@@ -12,13 +12,14 @@ if str(PROJECT_ROOT) not in sys.path:
 pytest.importorskip("strands")
 
 from agents.strands_agent import StrandsAgent
+from agents.events.ui import StreamlitUIState
+from agents.events.ui import messages as messages_module
+from agents.events.ui import placeholders as placeholders_module
+from agents.events.ui import reasoning as reasoning_module
+from agents.events.ui import tools as tools_module
+from agents.events.ui import utils as utils_module
 from app.events import handlers as ui_handlers_module
-from app.events.handlers import StreamlitUIHandler, StreamlitUIState
-from app.events.ui import messages as messages_module
-from app.events.ui import placeholders as placeholders_module
-from app.events.ui import reasoning as reasoning_module
-from app.events.ui import tools as tools_module
-from app.events.ui import utils as utils_module
+from app.events.handlers import StreamlitUIHandler
 
 
 class MockPlaceholder:
@@ -198,6 +199,42 @@ class TestStreamlitUIHandler:
         entry = self.ui_state.tool_map["tool-1"]
         assert entry["input"] is None
 
+    def test_handle_current_tool_use_with_arguments_field(self):
+        """OpenAI/GPT models use 'arguments' instead of 'input' field."""
+        # Test with 'arguments' field (OpenAI/GPT style)
+        event = {
+            "current_tool_use": {
+                "tool_use_id": "tool-gpt-1",  # snake_case for OpenAI
+                "name": "calculator",
+                "arguments": '{"expression": "2+2"}',  # OpenAI uses 'arguments'
+            }
+        }
+        self.handler.handle(event)
+
+        # Verify the arguments field was processed correctly
+        entry = self.ui_state.tool_map["tool-gpt-1"]
+        assert entry["input"] is not None
+        assert entry["input_is_json"] is True
+        assert "expression" in str(entry["input"]) or "2+2" in str(entry["input"])
+
+    def test_handle_current_tool_use_with_input_field(self):
+        """Anthropic/Nova models use 'input' field."""
+        # Test with 'input' field (Anthropic/Nova style)
+        event = {
+            "current_tool_use": {
+                "toolUseId": "tool-nova-1",  # camelCase for Anthropic/Nova
+                "name": "calculator",
+                "input": {"expression": "3+3"},  # Anthropic/Nova uses 'input'
+            }
+        }
+        self.handler.handle(event)
+
+        # Verify the input field was processed correctly
+        entry = self.ui_state.tool_map["tool-nova-1"]
+        assert entry["input"] is not None
+        assert entry["input_is_json"] is True
+        assert "expression" in str(entry["input"]) or "3+3" in str(entry["input"])
+
     def test_handle_force_stop_event(self):
         """Force-stop events should store the error message."""
         event = {"force_stop": True, "force_stop_reason": "Test error"}
@@ -370,7 +407,7 @@ class TestEventRegistry:
     
     def test_event_type_extraction(self):
         """Event type extraction should respect the priority order."""
-        from app.events.registry import EventRegistry
+        from agents.events.registry import EventRegistry
         
         registry = EventRegistry()
         
