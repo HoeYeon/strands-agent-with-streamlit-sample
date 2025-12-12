@@ -39,5 +39,5 @@ class StreamlitChatApp:
         self.ui_manager.render_chat_history(self.session_manager.messages)
 
         # Handle new user input
-        if prompt := self.ui_manager.get_user_input():
+        if prompt := self.ui_manager.get_user_input(self.session_manager):
             self.chat_handler.handle_user_input(prompt)

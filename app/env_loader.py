@@ -50,13 +50,6 @@ class EnvLoader:
             return value.lower() in ('true', '1', 'yes', 'on')
         return bool(value)
 
-    def get_aws_credentials(self) -> Dict[str, str]:
-        """Get AWS credentials from environment."""
-        return {
-            'access_key_id': self.get('AWS_ACCESS_KEY_ID'),
-            'secret_access_key': self.get('AWS_SECRET_ACCESS_KEY'),
-            'region': self.get('AWS_DEFAULT_REGION', 'us-west-2'),
-        }
 
     def get_debug_settings(self) -> Dict[str, Any]:
         """Get debug and logging settings."""

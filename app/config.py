@@ -24,7 +24,7 @@ class AppConfig:
     available_models: List[str] = None
 
     # Default model
-    default_model: str = "us.amazon.nova-pro-v1:0"
+    default_model: str = "openai.gpt-oss-120b-1:0"
 
     # UI settings
     app_title: str = "🤖 Amazon Bedrock Agent Chat"
@@ -48,12 +48,12 @@ class AppConfig:
 
         if self.available_models is None:
             self.available_models = [
+                "openai.gpt-oss-120b-1:0",
                 "us.amazon.nova-pro-v1:0",
                 "us.amazon.nova-premier-v1:0",
                 "us.anthropic.claude-sonnet-4-20250514-v1:0",
                 "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
                 "us.anthropic.claude-haiku-4-5-20251001-v1:0",
-                "openai.gpt-oss-120b-1:0"
             ]
 
         # Override default model from environment if specified

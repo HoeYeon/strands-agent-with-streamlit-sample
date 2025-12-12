@@ -54,9 +54,24 @@ class UIManager:
                 else:
                     self.message_renderer.render_assistant_message(message["content"])
 
-    def get_user_input(self) -> str:
-        """Get user input from chat input widget."""
-        return st.chat_input(self.config.chat_input_placeholder)
+    def get_user_input(self, session_manager=None) -> str:
+        """Get user input from chat input widget or show loading state."""
+        if session_manager is None:
+            # Fallback to original behavior if no session_manager provided
+            return st.chat_input(self.config.chat_input_placeholder)
+        
+        # Check agent status
+        if session_manager.agent is None:
+            if session_manager.current_model is None:
+                # No model selected yet
+                st.info("🔧 모델을 선택해주세요")
+            else:
+                # Model selected but agent not initialized (loading or failed)
+                st.info("🔄 모델 초기화 중...")
+            return None
+        else:
+            # Agent is ready, show normal input
+            return st.chat_input(self.config.chat_input_placeholder)
 
     def create_chat_container(self):
         """Create and return a chat message container."""
