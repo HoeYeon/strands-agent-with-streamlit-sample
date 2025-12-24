@@ -45,6 +45,5 @@ Thumbs.db
 *.local
 
 # IDE and AI Assistant directories
-.kiro/
 .amazonq/
 .claude/
