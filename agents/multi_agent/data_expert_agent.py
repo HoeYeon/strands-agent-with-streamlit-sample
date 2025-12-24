@@ -54,28 +54,44 @@ class DataExpertAgent(BaseMultiAgent):
 
 ⚠️ 핵심 규칙: MCP 도구로 탐색 완료 후에만 handoff_to_agent 호출 가능
 
-작업 순서:
-1. list_databases → 데이터베이스 목록 조회
-2. list_tables (max_results=50) → 테이블 메타데이터 수집
-3. get_table → 컬럼명과 타입 상세 조회  ← 추가
-4. 사용자 요청 분석 → 적합한 테이블 식별
-5. handoff_to_agent 호출
+────────────────────────────────────────────
+요청 유형별 작업
+────────────────────────────────────────────
 
-테이블 매칭 기준:
+**정보 조회** ("테이블 목록", "스키마", "어떤 데이터"):
+1. list_databases
+2. list_tables (max_results=50)
+3. lead_agent로 handoff
+   message="[정보 조회 완료] {탐색 결과 요약}"
+
+**데이터 분석** ("합계", "통계", "가장 많은"):
+1. list_databases
+2. list_tables (max_results=50)
+3. get_table → 컬럼명 + 타입 상세 조회
+4. sql_agent로 handoff (아래 형식 필수)
+
+────────────────────────────────────────────
+sql_agent 전달 형식 (필수)
+────────────────────────────────────────────
+테이블: database.table_name
+컬럼:
+- column_name (타입: bigint)
+- date_column (타입: string, 형식: YYYY-MM-DD)  ← 날짜가 string이면 형식 명시
+파티션 키: partition_col (타입)
+사용자 요청: {원래 요청}
+
+────────────────────────────────────────────
+테이블 매칭 기준
+────────────────────────────────────────────
 - 테이블/컬럼명과 요청의 연관성
-- 숫자형 컬럼 (metric용), 날짜 컬럼 (필터용) 존재 여부
+- 숫자형 컬럼 (metric용)
+- 날짜 컬럼 (필터용) + 타입 확인
 - 파티션 키 (성능 최적화)
 
-handoff 규칙:
-- sql_agent: 추천 테이블 + 컬럼 정보 확보 완료 시
-- lead_agent: 탐색 완료 또는 3회 이상 오류 시
-
-⚠️ sql_agent 전달 시 필수 포맷:
-테이블: database.table_name
-컬럼 정보:
-- column_name (타입: string/bigint/timestamp 등)
-- date_column (타입: string) ← 날짜지만 string인 경우 명시
-파티션 키: partition_col (타입)
+────────────────────────────────────────────
+오류 처리
+────────────────────────────────────────────
+3회 실패 시 → lead_agent로 handoff (오류 내용 포함)
 """
         
         return base_prompt

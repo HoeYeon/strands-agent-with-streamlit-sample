@@ -58,11 +58,13 @@ def main():
             "us.anthropic.claude-sonnet-4-20250514-v1:0",
             "us.amazon.nova-pro-v1:0",
             "us.amazon.nova-premier-v1:0", 
-            "openai.gpt-oss-20b-1:0"
+            "openai.gpt-oss-20b-1:0",
+            "global.anthropic.claude-haiku-4-5-20251001-v1:0"
+
         ],
         
         # 기본 모델 (Claude가 Swarm과 가장 호환성이 좋음)
-        default_model="us.anthropic.claude-sonnet-4-20250514-v1:0",
+        default_model="global.anthropic.claude-haiku-4-5-20251001-v1:0",
         
         # 멀티에이전트 팩토리 설정 (Requirements 5.1, 5.2, 5.3)
         agent_factory=create_multi_agent
