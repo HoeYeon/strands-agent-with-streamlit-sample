@@ -127,7 +127,7 @@ class MultiAgentText2SQL:
             "FASTMCP_LOG_LEVEL": "ERROR",
             "LOGURU_LEVEL": "ERROR",
             "LOG_LEVEL": "ERROR",
-            "AWS_PROFILE": os.environ.get("AWS_PROFILE", "default"),
+            "AWS_PROFILE": os.environ.get("AWS_PROFILE", "demo"),
             "AWS_DEFAULT_REGION": os.environ.get("AWS_DEFAULT_REGION", "us-west-2"),
         }
         
