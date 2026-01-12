@@ -1,0 +1,4 @@
+# Ignore all files and directories except markdown_descriptions
+*
+!.gitignore
+!markdown_descriptions/
