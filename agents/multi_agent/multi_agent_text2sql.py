@@ -39,6 +39,7 @@ from agents.events.ui import StreamlitUIState
 from .lead_agent import LeadAgent, AgentType, WorkflowStatus
 from .data_expert_agent import DataExpertAgent
 from .sql_agent import SQLAgent
+from .rag_agent import RAGAgent
 from .shared_context import AnalysisContext, SwarmConfig
 from .event_adapter import (
     SwarmEventAdapter,
@@ -220,6 +221,7 @@ class MultiAgentText2SQL:
         Strands Swarm 패턴을 사용하여 에이전트 간 협업을 구성합니다.
         - handoff_to_agent 도구는 Swarm에서 자동으로 각 에이전트에 제공됩니다
         - invocation_state를 통해 MCP 클라이언트와 설정을 공유합니다
+        - RAG Agent는 선택적으로 활성화됩니다 (Requirements 3.1, 3.5)
         """
         # MCP 도구 가져오기 및 에이전트별 필터링
         mcp_tools = self._get_mcp_tools()
@@ -245,11 +247,34 @@ class MultiAgentText2SQL:
         self.data_expert = DataExpertAgent(self.model_id, tools=data_expert_tools)
         self.sql_agent = SQLAgent(self.model_id, tools=sql_agent_tools)
         
+        # RAG Agent 생성 (Requirements 3.1)
+        # OpenSearch 설정은 환경 변수에서 가져옴
+        opensearch_endpoint = os.environ.get("OPENSEARCH_ENDPOINT")
+        opensearch_index = os.environ.get("OPENSEARCH_INDEX", "schema_docs")
+        opensearch_username = os.environ.get("OPENSEARCH_USERNAME")
+        opensearch_password = os.environ.get("OPENSEARCH_PASSWORD")
+        
+        self.rag_agent = RAGAgent(
+            model_id=self.model_id,
+            opensearch_endpoint=opensearch_endpoint,
+            opensearch_index=opensearch_index,
+            opensearch_username=opensearch_username,
+            opensearch_password=opensearch_password,
+            tools=[]
+        )
+        
+        # RAG Agent 활성화 상태 로깅
+        if self.rag_agent.is_rag_enabled():
+            print(f"\n📚 [RAG Agent] 활성화됨 - OpenSearch: {opensearch_endpoint}", file=sys.stderr)
+        else:
+            print(f"\n📚 [RAG Agent] 비활성화됨 (OpenSearch 미설정 또는 연결 실패)", file=sys.stderr)
+        
         # 각 에이전트에 별도의 callback_handler 설정 (Requirements 5.3 - UI 이벤트 전달)
         # data_expert는 터미널에만 로깅하는 핸들러 사용
         self.lead_agent.agent.callback_handler = self._create_callback_handler("lead_agent")
         self.data_expert.agent.callback_handler = self._create_callback_handler("data_expert")
         self.sql_agent.agent.callback_handler = self._create_callback_handler("sql_agent")
+        self.rag_agent.agent.callback_handler = self._create_callback_handler("rag_agent")
         
         # Swarm 설정 (Requirements 4.1)
         config = SwarmConfig()
@@ -264,15 +289,25 @@ class MultiAgentText2SQL:
             },
             "debug_mode": False,
             "session_id": f"session_{int(time.time())}",
-            "analysis_context": None  # 분석 컨텍스트 공유용
+            "analysis_context": None,  # 분석 컨텍스트 공유용
+            # RAG 관련 설정 (Requirements 3.1)
+            "rag_enabled": self.rag_agent.is_rag_enabled(),
+            "opensearch_endpoint": opensearch_endpoint,
+            "opensearch_index": opensearch_index
         }
         
-        # Swarm 생성 (Requirements 4.1)
+        # Swarm 생성 (Requirements 4.1, 3.1)
         # - entry_point: Lead Agent가 진입점
         # - handoff_to_agent 도구가 자동으로 각 에이전트에 추가됨 (Requirements 4.2)
+        # - RAG Agent도 Swarm에 등록하여 handoff 가능 (Requirements 3.1)
         # 주의: 에이전트 리스트는 위치 인자로 전달해야 함 (agents= 키워드 사용 불가)
         swarm = Swarm(
-            [self.lead_agent.agent, self.data_expert.agent, self.sql_agent.agent],
+            [
+                self.lead_agent.agent, 
+                self.data_expert.agent, 
+                self.sql_agent.agent,
+                self.rag_agent.agent  # RAG Agent 추가 (Requirements 3.1)
+            ],
             entry_point=self.lead_agent.agent,
             max_handoffs=config.max_handoffs,
             max_iterations=config.max_iterations,
@@ -548,13 +583,15 @@ class MultiAgentText2SQL:
         agent_type_map = {
             "lead_agent": AgentType.LEAD,
             "data_expert": AgentType.DATA_EXPERT,
-            "sql_agent": AgentType.SQL
+            "sql_agent": AgentType.SQL,
+            "rag_agent": AgentType.RAG
         }
         
         status_map = {
             "lead_agent": WorkflowStatus.ANALYZING,
             "data_expert": WorkflowStatus.DATA_EXPLORATION,
-            "sql_agent": WorkflowStatus.SQL_GENERATION
+            "sql_agent": WorkflowStatus.SQL_GENERATION,
+            "rag_agent": WorkflowStatus.DATA_EXPLORATION  # RAG도 데이터 탐색 단계
         }
         
         agent_type = agent_type_map.get(agent_name)
@@ -684,6 +721,13 @@ class MultiAgentText2SQL:
                 "initialized": self.sql_agent.agent is not None
             }
         
+        if hasattr(self, 'rag_agent'):
+            debug_info["agents"]["rag_agent"] = {
+                "initialized": self.rag_agent.agent is not None,
+                "rag_enabled": self.rag_agent.is_rag_enabled(),
+                "status": self.rag_agent.get_status()
+            }
+        
         return debug_info
     
     def get_analysis_context(self) -> AnalysisContext:
@@ -756,6 +800,24 @@ class MultiAgentText2SQL:
             에이전트 진행 상황 목록
         """
         return self._event_adapter.get_agent_progress()
+    
+    def get_rag_agent(self) -> Optional[RAGAgent]:
+        """RAG Agent 인스턴스 반환 (Requirements 3.1)
+        
+        Returns:
+            RAGAgent 인스턴스 또는 None
+        """
+        return getattr(self, 'rag_agent', None)
+    
+    def is_rag_enabled(self) -> bool:
+        """RAG 활성화 상태 확인 (Requirements 3.5)
+        
+        Returns:
+            RAG가 활성화되어 있는지 여부
+        """
+        if hasattr(self, 'rag_agent') and self.rag_agent:
+            return self.rag_agent.is_rag_enabled()
+        return False
     
     def set_status_placeholder(self, placeholder) -> None:
         """상태 표시용 placeholder 설정 (Requirements 1.5)

@@ -36,6 +36,11 @@ class AnalysisContext:
     results: Optional[List[Dict]] = None
     error_messages: List[str] = field(default_factory=list)
     
+    # RAG 관련 필드 (Requirements 3.4)
+    rag_schema_results: List[Dict[str, Any]] = field(default_factory=list)
+    rag_domain_results: List[Dict[str, Any]] = field(default_factory=list)
+    rag_enabled: bool = True  # RAG 사용 여부
+    
     def add_error(self, message: str):
         """에러 메시지 추가"""
         self.error_messages.append(message)
@@ -43,6 +48,19 @@ class AnalysisContext:
     def clear_errors(self):
         """에러 메시지 초기화"""
         self.error_messages.clear()
+    
+    def add_rag_schema_result(self, result: Dict[str, Any]) -> None:
+        """RAG 스키마 검색 결과 추가 (Requirements 3.4)"""
+        self.rag_schema_results.append(result)
+    
+    def add_rag_domain_result(self, result: Dict[str, Any]) -> None:
+        """RAG 도메인 검색 결과 추가 (Requirements 3.4)"""
+        self.rag_domain_results.append(result)
+    
+    def clear_rag_results(self) -> None:
+        """RAG 검색 결과 초기화"""
+        self.rag_schema_results.clear()
+        self.rag_domain_results.clear()
 
 
 @dataclass

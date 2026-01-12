@@ -25,6 +25,7 @@ class AgentType(Enum):
     LEAD = "lead_agent"
     DATA_EXPERT = "data_expert"
     SQL = "sql_agent"
+    RAG = "rag_agent"
 
 
 class WorkflowStatus(Enum):
@@ -126,6 +127,7 @@ class LeadAgent(BaseMultiAgent):
 협업 에이전트:
 - data_expert: 데이터 카탈로그 탐색, 테이블 식별
 - sql_agent: SQL 생성 및 Athena 실행
+- rag_agent: 스키마 문서 및 도메인 지식 검색 (선택적)
 
 ────────────────────────────────────────────
 요청 유형 판단
@@ -141,6 +143,10 @@ class LeadAgent(BaseMultiAgent):
 **테이블 정보 이미 있는 경우**:
 - data_expert 생략 → sql_agent 직접 위임
 
+**RAG 활용** (선택적):
+- 스키마 문서나 도메인 지식이 필요한 경우 rag_agent 호출
+- RAG 실패 시에도 기존 워크플로우 계속 진행
+
 ────────────────────────────────────────────
 handoff 규칙
 ────────────────────────────────────────────
@@ -149,6 +155,9 @@ data_expert 위임:
 
 sql_agent 위임:
   handoff_to_agent(agent_name="sql_agent", message="SQL 요청: [테이블 정보 + 요구사항]")
+
+rag_agent 위임 (선택적):
+  handoff_to_agent(agent_name="rag_agent", message="검색 요청: [스키마/도메인 지식 검색 요청]")
 
 ⚠️ 금지:
 - 동일 에이전트 2회 연속 위임

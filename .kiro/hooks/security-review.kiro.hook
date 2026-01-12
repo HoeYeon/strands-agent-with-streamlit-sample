@@ -4,8 +4,7 @@
   "description": "변경된 파일에서 잠재적인 보안 이슈를 검토합니다",
   "version": "1",
   "when": {
-    "type": "fileEdited",
-    "patterns": []
+    "type": "userTriggered"
   },
   "then": {
     "type": "askAgent",
