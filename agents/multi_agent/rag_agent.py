@@ -18,17 +18,102 @@ Requirements:
 - 3.5: RAG 실패 시 기존 워크플로우 계속 진행
 """
 
+import hashlib
 import json
 import logging
+import signal
+import time
+from collections import OrderedDict
+from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar
 
 from strands import Agent
+from strands.tools import tool
 
 from .base_agent import BaseMultiAgent
 from .shared_context import AnalysisContext
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# 타임아웃 처리 유틸리티
+# =============================================================================
+
+T = TypeVar('T')
+
+
+class TimeoutError(Exception):
+    """타임아웃 예외"""
+    pass
+
+
+@contextmanager
+def timeout_context(seconds: int, error_message: str = "작업 타임아웃"):
+    """타임아웃 컨텍스트 매니저 (Requirements 1.4)
+
+    지정된 시간 내에 작업이 완료되지 않으면 TimeoutError를 발생시킵니다.
+    Unix 시스템의 메인 스레드에서만 동작합니다 (signal.SIGALRM 사용).
+
+    Args:
+        seconds: 타임아웃 시간 (초)
+        error_message: 타임아웃 시 에러 메시지
+
+    Yields:
+        None
+
+    Raises:
+        TimeoutError: 타임아웃 발생 시
+    """
+    def timeout_handler(signum, frame):
+        raise TimeoutError(error_message)
+
+    # Unix 시스템의 메인 스레드에서만 signal 사용 가능
+    try:
+        old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+        signal.alarm(seconds)
+        try:
+            yield
+        finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old_handler)
+    except (AttributeError, ValueError):
+        # AttributeError: Windows 등 signal.SIGALRM이 없는 시스템
+        # ValueError: 메인 스레드가 아닌 경우 (Streamlit 등)
+        # 타임아웃 없이 실행
+        yield
+
+
+def with_timeout(
+    func: Callable[..., T],
+    timeout_seconds: int,
+    *args,
+    **kwargs
+) -> Tuple[Optional[T], Optional[str]]:
+    """함수 실행에 타임아웃 적용 (Requirements 1.4)
+    
+    Args:
+        func: 실행할 함수
+        timeout_seconds: 타임아웃 시간 (초)
+        *args: 함수 인자
+        **kwargs: 함수 키워드 인자
+        
+    Returns:
+        (결과, 에러 메시지) 튜플
+    """
+    try:
+        with timeout_context(timeout_seconds, f"{func.__name__} 타임아웃 ({timeout_seconds}초)"):
+            result = func(*args, **kwargs)
+            return result, None
+    except TimeoutError as e:
+        error_msg = str(e)
+        logger.error(error_msg)
+        return None, error_msg
+    except Exception as e:
+        error_msg = f"{func.__name__} 실행 실패: {type(e).__name__} - {str(e)}"
+        logger.error(error_msg)
+        return None, error_msg
 
 
 # =============================================================================
@@ -51,11 +136,138 @@ EMBEDDING_TIMEOUT = 30  # 초
 # 재시도 설정
 MAX_RETRY_ATTEMPTS = 3
 RETRY_DELAY_SECONDS = 1
+RETRY_BACKOFF_MULTIPLIER = 2.0  # 지수 백오프 배수
+
+# 캐시 설정
+EMBEDDING_CACHE_MAX_SIZE = 100  # 최대 캐시 항목 수
+EMBEDDING_CACHE_TTL_SECONDS = 3600  # 캐시 TTL (1시간)
 
 
 # =============================================================================
 # 데이터 모델
 # =============================================================================
+
+@dataclass
+class EmbeddingCacheEntry:
+    """임베딩 캐시 엔트리 (Requirements 1.1)
+    
+    캐시된 임베딩 벡터와 메타데이터를 저장합니다.
+    """
+    embedding: List[float]
+    created_at: float  # timestamp
+    text_hash: str  # 원본 텍스트의 해시
+
+
+class LRUEmbeddingCache:
+    """LRU 기반 임베딩 캐시 (Requirements 1.1)
+    
+    최근 사용된 임베딩을 캐시하여 중복 API 호출을 방지합니다.
+    TTL과 최대 크기 제한을 지원합니다.
+    """
+    
+    def __init__(
+        self,
+        max_size: int = EMBEDDING_CACHE_MAX_SIZE,
+        ttl_seconds: int = EMBEDDING_CACHE_TTL_SECONDS
+    ):
+        """캐시 초기화
+        
+        Args:
+            max_size: 최대 캐시 항목 수
+            ttl_seconds: 캐시 항목 TTL (초)
+        """
+        self._cache: OrderedDict[str, EmbeddingCacheEntry] = OrderedDict()
+        self._max_size = max_size
+        self._ttl_seconds = ttl_seconds
+        self._hits = 0
+        self._misses = 0
+    
+    def _compute_hash(self, text: str) -> str:
+        """텍스트의 해시 계산"""
+        return hashlib.sha256(text.encode('utf-8')).hexdigest()[:32]
+    
+    def get(self, text: str) -> Optional[List[float]]:
+        """캐시에서 임베딩 조회
+        
+        Args:
+            text: 원본 텍스트
+            
+        Returns:
+            캐시된 임베딩 또는 None
+        """
+        text_hash = self._compute_hash(text)
+        
+        if text_hash not in self._cache:
+            self._misses += 1
+            return None
+        
+        entry = self._cache[text_hash]
+        
+        # TTL 확인
+        if time.time() - entry.created_at > self._ttl_seconds:
+            del self._cache[text_hash]
+            self._misses += 1
+            return None
+        
+        # LRU: 최근 사용으로 이동
+        self._cache.move_to_end(text_hash)
+        self._hits += 1
+        
+        return entry.embedding
+    
+    def put(self, text: str, embedding: List[float]) -> None:
+        """캐시에 임베딩 저장
+        
+        Args:
+            text: 원본 텍스트
+            embedding: 임베딩 벡터
+        """
+        text_hash = self._compute_hash(text)
+        
+        # 이미 존재하면 업데이트
+        if text_hash in self._cache:
+            self._cache.move_to_end(text_hash)
+            self._cache[text_hash] = EmbeddingCacheEntry(
+                embedding=embedding,
+                created_at=time.time(),
+                text_hash=text_hash
+            )
+            return
+        
+        # 최대 크기 초과 시 가장 오래된 항목 제거
+        while len(self._cache) >= self._max_size:
+            self._cache.popitem(last=False)
+        
+        # 새 항목 추가
+        self._cache[text_hash] = EmbeddingCacheEntry(
+            embedding=embedding,
+            created_at=time.time(),
+            text_hash=text_hash
+        )
+    
+    def clear(self) -> None:
+        """캐시 초기화"""
+        self._cache.clear()
+        self._hits = 0
+        self._misses = 0
+    
+    def get_stats(self) -> Dict[str, Any]:
+        """캐시 통계 반환"""
+        total = self._hits + self._misses
+        hit_rate = self._hits / total if total > 0 else 0.0
+        
+        return {
+            "size": len(self._cache),
+            "max_size": self._max_size,
+            "hits": self._hits,
+            "misses": self._misses,
+            "hit_rate": hit_rate,
+            "ttl_seconds": self._ttl_seconds
+        }
+    
+    def __len__(self) -> int:
+        return len(self._cache)
+
 
 @dataclass
 class SearchResult:
@@ -66,35 +278,38 @@ class SearchResult:
     source: str = ""  # 문서 출처
 
 
-@dataclass
-class ColumnDetail:
-    """컬럼 상세 정보 (Requirements 1.5)"""
-    name: str
-    type: str
-    description: str = ""
-    alias: str = ""
-    examples: List[str] = field(default_factory=list)
-
-
-@dataclass
-class SchemaInfo:
-    """스키마 문서에서 추출한 정보 (Requirements 1.5)"""
-    table_name: str
-    database: str
-    columns: List[ColumnDetail] = field(default_factory=list)
-    description: str = ""
-    business_logic: str = ""
-    source_doc: str = ""
-
-
-@dataclass
-class DomainMapping:
-    """도메인 용어 매핑 (Requirements 2.3)"""
-    business_term: str
-    database_column: str
-    table: str
-    description: str = ""
-    usage_frequency: int = 0
+# 아래 데이터 모델들은 더 이상 사용되지 않습니다.
+# OpenSearch에 이미 구조화된 형태로 저장되어 있어 별도 파싱이 불필요합니다.
+# 
+# @dataclass
+# class ColumnDetail:
+#     """컬럼 상세 정보 (Requirements 1.5)"""
+#     name: str
+#     type: str
+#     description: str = ""
+#     alias: str = ""
+#     examples: List[str] = field(default_factory=list)
+# 
+# 
+# @dataclass
+# class SchemaInfo:
+#     """스키마 문서에서 추출한 정보 (Requirements 1.5)"""
+#     table_name: str
+#     database: str
+#     columns: List[ColumnDetail] = field(default_factory=list)
+#     description: str = ""
+#     business_logic: str = ""
+#     source_doc: str = ""
+# 
+# 
+# @dataclass
+# class DomainMapping:
+#     """도메인 용어 매핑 (Requirements 2.3)"""
+#     business_term: str
+#     database_column: str
+#     table: str
+#     description: str = ""
+#     usage_frequency: int = 0
 
 
 # =============================================================================
@@ -149,8 +364,11 @@ class RAGAgent(BaseMultiAgent):
         self._bedrock_client = None
         self._rag_enabled = True
         
-        # 캐시
-        self._embedding_cache: Dict[str, List[float]] = {}
+        # LRU 임베딩 캐시 초기화 (Requirements 1.1)
+        self._embedding_cache = LRUEmbeddingCache(
+            max_size=EMBEDDING_CACHE_MAX_SIZE,
+            ttl_seconds=EMBEDDING_CACHE_TTL_SECONDS
+        )
         
         super().__init__(model_id, tools)
         
@@ -179,28 +397,32 @@ class RAGAgent(BaseMultiAgent):
         if self.opensearch_endpoint and self.opensearch_username and self.opensearch_password:
             try:
                 from opensearchpy import OpenSearch, RequestsHttpConnection
-                
+
                 # 엔드포인트에서 호스트 추출
                 host = self.opensearch_endpoint.replace("https://", "").replace("http://", "")
                 if host.endswith("/"):
                     host = host[:-1]
-                
+
                 # 포트 추출 (기본값 443)
                 if ":" in host:
                     host, port_str = host.rsplit(":", 1)
                     port = int(port_str)
                 else:
                     port = 443
-                
+
+                # localhost 터널 사용 시 SSL 인증서 검증 비활성화
+                is_localhost = host in ("localhost", "127.0.0.1")
+
                 self._opensearch_client = OpenSearch(
                     hosts=[{"host": host, "port": port}],
                     http_auth=(self.opensearch_username, self.opensearch_password),
                     use_ssl=True,
-                    verify_certs=True,
+                    verify_certs=not is_localhost,  # localhost면 검증 비활성화
+                    ssl_show_warn=False,
                     connection_class=RequestsHttpConnection,
                     timeout=OPENSEARCH_TIMEOUT
                 )
-                logger.info(f"OpenSearch 클라이언트 초기화 성공: {host}:{port}")
+                logger.info(f"OpenSearch 클라이언트 초기화 성공: {host}:{port} (verify_certs={not is_localhost})")
             except ImportError as e:
                 logger.warning(f"OpenSearch 라이브러리 없음: {e}")
                 self._rag_enabled = False
@@ -212,13 +434,74 @@ class RAGAgent(BaseMultiAgent):
             self._rag_enabled = False
 
     
+    def _create_search_tools(self) -> List:
+        """RAG 검색 도구 생성 (Requirements 3.1)
+
+        @tool 데코레이터를 사용하여 Agent가 호출할 수 있는 검색 도구를 생성합니다.
+        기존 search_and_extract 메서드를 활용합니다.
+        """
+        # self를 클로저로 캡처
+        rag_agent = self
+
+        @tool
+        def search_rag_documents(query: str) -> str:
+            """RAG 문서 통합 검색 도구 (Requirements 1.2, 2.1)
+
+            스키마 문서와 도메인 지식을 동시에 검색합니다.
+            - 스키마 문서: 테이블/컬럼 정보, 데이터 타입, 설명
+            - 도메인 지식: 비즈니스 용어 매핑, 메트릭 정의, 계산 공식
+
+            Args:
+                query: 검색할 쿼리 (예: "매출", "사용자 정보", "주문 테이블", "활성 사용자")
+
+            Returns:
+                검색된 스키마 문서와 도메인 지식 정보
+            """
+            # 기존 search_and_extract 메서드 활용
+            result = rag_agent.search_and_extract(query)
+
+            if not result["success"]:
+                errors = ", ".join(result["errors"]) if result["errors"] else "알 수 없는 오류"
+                return f"검색 실패: {errors}"
+
+            output_parts = []
+
+            # 스키마 검색 결과 포맷팅
+            if result["schema_results"]:
+                schema_text = rag_agent.format_results_for_agent(result["schema_results"])
+                output_parts.append("## 스키마 문서 검색 결과\n" + schema_text)
+
+            # 도메인 검색 결과 포맷팅
+            if result["domain_results"]:
+                domain_text = rag_agent.format_results_for_agent(result["domain_results"])
+                output_parts.append("## 도메인 지식 검색 결과\n" + domain_text)
+
+            # 결과가 없는 경우 대안 제안
+            if not result["schema_results"] and not result["domain_results"]:
+                if result["suggestions"]:
+                    suggestions_text = "\n".join([
+                        f"- {s['suggestion']}" for s in result["suggestions"][:3]
+                    ])
+                    return f"'{query}'에 대한 검색 결과가 없습니다.\n\n대안 제안:\n{suggestions_text}"
+                return f"'{query}'에 대한 검색 결과가 없습니다."
+
+            return "\n\n".join(output_parts)
+
+        return [search_rag_documents]
+
     def _setup_agent(self) -> None:
         """RAG Agent 초기화 (Requirements 3.1)"""
+        # RAG 검색 도구 생성
+        search_tools = self._create_search_tools()
+
+        # 기존 도구와 검색 도구 병합
+        all_tools = search_tools + (self.tools if self.tools else [])
+
         self.agent = Agent(
             name="rag_agent",
             system_prompt=self.get_system_prompt(),
             model=self.model_id,
-            tools=self.tools if self.tools else None
+            tools=all_tools if all_tools else None
         )
     
     def get_system_prompt(self) -> str:
@@ -283,54 +566,181 @@ handoff 규칙
     # Requirements 1.1: 쿼리 임베딩 변환
     # =========================================================================
     
-    def generate_embedding(self, text: str) -> Optional[List[float]]:
+    def generate_embedding(
+        self,
+        text: str,
+        use_cache: bool = True
+    ) -> Optional[List[float]]:
         """텍스트를 임베딩 벡터로 변환 (Requirements 1.1)
         
         AWS Bedrock Titan Embeddings V2를 사용하여 텍스트를 
-        1024차원 벡터로 변환합니다.
+        1024차원 벡터로 변환합니다. 재시도 로직과 캐싱을 지원합니다.
         
         Args:
             text: 변환할 텍스트
+            use_cache: 캐시 사용 여부 (기본 True)
             
         Returns:
             임베딩 벡터 (1024차원) 또는 None (실패 시)
         """
+        if not text or not text.strip():
+            logger.warning("빈 텍스트 - 임베딩 생성 불가")
+            return None
+        
         if not self._bedrock_client:
             logger.warning("Bedrock 클라이언트 없음 - 임베딩 생성 불가")
             return None
         
         # 캐시 확인
-        cache_key = text[:100]  # 처음 100자를 키로 사용
-        if cache_key in self._embedding_cache:
-            return self._embedding_cache[cache_key]
+        if use_cache:
+            cached_embedding = self._embedding_cache.get(text)
+            if cached_embedding is not None:
+                logger.debug(f"캐시 히트: 텍스트 길이 {len(text)}")
+                return cached_embedding
         
-        try:
-            # Titan Embeddings V2 호출
-            body = json.dumps({
-                "inputText": text[:MAX_EMBEDDING_TOKENS * 4],  # 대략적인 토큰 제한
-                "dimensions": EMBEDDING_DIMENSION,
-                "normalize": True
-            })
+        # 재시도 로직으로 임베딩 생성
+        embedding = self._generate_embedding_with_retry(text)
+        
+        # 캐시에 저장
+        if embedding and use_cache:
+            self._embedding_cache.put(text, embedding)
+        
+        return embedding
+    
+    def _generate_embedding_with_retry(
+        self,
+        text: str
+    ) -> Optional[List[float]]:
+        """재시도 로직을 포함한 임베딩 생성 (Requirements 1.1)
+        
+        최대 3회 재시도하며, 지수 백오프를 적용합니다.
+        
+        Args:
+            text: 변환할 텍스트
             
-            response = self._bedrock_client.invoke_model(
-                modelId=self.embedding_model,
-                body=body,
-                contentType="application/json",
-                accept="application/json"
+        Returns:
+            임베딩 벡터 또는 None (실패 시)
+        """
+        last_error: Optional[Exception] = None
+        delay = RETRY_DELAY_SECONDS
+        
+        for attempt in range(1, MAX_RETRY_ATTEMPTS + 1):
+            try:
+                embedding = self._invoke_bedrock_embedding(text)
+                if embedding:
+                    if attempt > 1:
+                        logger.info(f"임베딩 생성 성공 (시도 {attempt}/{MAX_RETRY_ATTEMPTS})")
+                    return embedding
+                    
+            except Exception as e:
+                last_error = e
+                error_type = type(e).__name__
+                
+                # 재시도 불가능한 에러 확인
+                if self._is_non_retryable_error(e):
+                    logger.error(f"재시도 불가능한 에러: {error_type} - {e}")
+                    break
+                
+                # 마지막 시도가 아니면 대기 후 재시도
+                if attempt < MAX_RETRY_ATTEMPTS:
+                    logger.warning(
+                        f"임베딩 생성 실패 (시도 {attempt}/{MAX_RETRY_ATTEMPTS}): "
+                        f"{error_type} - {e}. {delay}초 후 재시도..."
+                    )
+                    time.sleep(delay)
+                    delay *= RETRY_BACKOFF_MULTIPLIER  # 지수 백오프
+                else:
+                    logger.error(
+                        f"임베딩 생성 최종 실패 (시도 {attempt}/{MAX_RETRY_ATTEMPTS}): "
+                        f"{error_type} - {e}"
+                    )
+        
+        return None
+    
+    def _invoke_bedrock_embedding(self, text: str) -> Optional[List[float]]:
+        """Bedrock API를 호출하여 임베딩 생성 (Requirements 1.1)
+        
+        Args:
+            text: 변환할 텍스트
+            
+        Returns:
+            임베딩 벡터 또는 None
+            
+        Raises:
+            Exception: API 호출 실패 시
+        """
+        # 텍스트 길이 검증 (최대 8192 토큰, 대략 4자당 1토큰)
+        max_chars = MAX_EMBEDDING_TOKENS * 4
+        if len(text) > max_chars:
+            logger.warning(
+                f"텍스트가 너무 깁니다 ({len(text)}자). "
+                f"{max_chars}자로 잘라냅니다."
             )
-            
-            response_body = json.loads(response["body"].read())
-            embedding = response_body.get("embedding", [])
-            
-            # 캐시에 저장
-            if len(self._embedding_cache) < 100:  # 최대 100개 캐시
-                self._embedding_cache[cache_key] = embedding
-            
-            return embedding
-            
-        except Exception as e:
-            logger.error(f"임베딩 생성 실패: {e}")
+            text = text[:max_chars]
+        
+        # Titan Embeddings V2 요청 본문
+        body = json.dumps({
+            "inputText": text,
+            "dimensions": EMBEDDING_DIMENSION,
+            "normalize": True
+        })
+        
+        response = self._bedrock_client.invoke_model(
+            modelId=self.embedding_model,
+            body=body,
+            contentType="application/json",
+            accept="application/json"
+        )
+        
+        response_body = json.loads(response["body"].read())
+        embedding = response_body.get("embedding", [])
+        
+        if not embedding:
+            logger.warning("Bedrock 응답에 임베딩이 없습니다")
             return None
+        
+        # 차원 검증
+        if len(embedding) != EMBEDDING_DIMENSION:
+            logger.warning(
+                f"임베딩 차원 불일치: 예상 {EMBEDDING_DIMENSION}, "
+                f"실제 {len(embedding)}"
+            )
+        
+        return embedding
+    
+    def _is_non_retryable_error(self, error: Exception) -> bool:
+        """재시도 불가능한 에러인지 확인
+        
+        Args:
+            error: 발생한 예외
+            
+        Returns:
+            재시도 불가능 여부
+        """
+        error_str = str(error).lower()
+        
+        # 재시도 불가능한 에러 패턴
+        non_retryable_patterns = [
+            "validationexception",  # 잘못된 요청
+            "accessdenied",  # 권한 없음
+            "invalidparametervalue",  # 잘못된 파라미터
+            "modelnotfound",  # 모델 없음
+            "resourcenotfound",  # 리소스 없음
+        ]
+        
+        for pattern in non_retryable_patterns:
+            if pattern in error_str:
+                return True
+        
+        return False
+    
+    def get_embedding_cache_stats(self) -> Dict[str, Any]:
+        """임베딩 캐시 통계 반환
+        
+        Returns:
+            캐시 통계 딕셔너리
+        """
+        return self._embedding_cache.get_stats()
 
     
     # =========================================================================
@@ -342,53 +752,187 @@ handoff 규칙
         query: str,
         doc_type: str = "schema",
         top_k: int = DEFAULT_TOP_K,
-        filters: Optional[Dict[str, str]] = None
-    ) -> List[SearchResult]:
-        """OpenSearch에서 문서 검색 수행 (Requirements 1.2, 1.3)
+        filters: Optional[Dict[str, str]] = None,
+        timeout_seconds: Optional[int] = None
+    ) -> Tuple[List[SearchResult], Optional[str]]:
+        """OpenSearch에서 문서 검색 수행 (Requirements 1.2, 1.3, 1.4)
         
         벡터 유사도 검색을 수행하고 상위 k개 결과를 반환합니다.
+        검색 실패 시 에러 메시지를 함께 반환합니다.
+        타임아웃을 지원합니다.
         
         Args:
             query: 검색 쿼리
             doc_type: 문서 타입 ("schema" 또는 "domain")
             top_k: 반환할 최대 문서 수 (기본 10개)
             filters: 필터 조건 (database, table_name)
+            timeout_seconds: 타임아웃 시간 (초, None이면 기본값 사용)
             
         Returns:
-            검색 결과 목록 (최대 10개)
+            (검색 결과 목록, 에러 메시지) 튜플
+            - 검색 결과: 최대 10개
+            - 에러 메시지: 실패 시 에러 설명, 성공 시 None
         """
+        # RAG 비활성화 상태 확인 (Requirements 3.5)
         if not self._rag_enabled or not self._opensearch_client:
-            logger.warning("RAG 비활성화 상태 - 빈 결과 반환")
-            return []
+            error_msg = "RAG가 비활성화되어 있습니다. OpenSearch 연결을 확인하세요."
+            logger.warning(error_msg)
+            return [], error_msg
         
         # 상위 10개로 제한 (Requirements 1.2)
         top_k = min(top_k, DEFAULT_TOP_K)
         
+        # 타임아웃 설정
+        if timeout_seconds is None:
+            timeout_seconds = OPENSEARCH_TIMEOUT
+        
+        # 타임아웃 적용하여 검색 수행 (Requirements 1.4)
+        try:
+            with timeout_context(
+                timeout_seconds,
+                f"검색 타임아웃 ({timeout_seconds}초 초과)"
+            ):
+                return self._search_documents_internal(query, doc_type, top_k, filters)
+        except TimeoutError as e:
+            error_msg = str(e)
+            logger.error(error_msg)
+            return [], error_msg
+        except Exception as e:
+            error_msg = f"검색 중 예외 발생: {type(e).__name__} - {str(e)}"
+            logger.error(error_msg)
+            return [], error_msg
+    
+    def _search_documents_internal(
+        self,
+        query: str,
+        doc_type: str,
+        top_k: int,
+        filters: Optional[Dict[str, str]] = None
+    ) -> Tuple[List[SearchResult], Optional[str]]:
+        """내부 검색 로직 (타임아웃 컨텍스트 내에서 실행)"""
         # 쿼리 임베딩 생성 (Requirements 1.1)
         query_embedding = self.generate_embedding(query)
         if not query_embedding:
-            logger.warning("임베딩 생성 실패 - 빈 결과 반환")
-            return []
+            error_msg = "쿼리 임베딩 생성에 실패했습니다. Bedrock 연결을 확인하세요."
+            logger.warning(error_msg)
+            return [], error_msg
         
-        try:
-            # 하이브리드 검색 쿼리 구성
-            search_query = self._build_search_query(
-                query_embedding, query, top_k, filters
-            )
+        # 재시도 로직으로 검색 수행 (Requirements 1.4)
+        results, error = self._search_with_retry(
+            query_embedding, query, top_k, filters
+        )
+        
+        # 빈 결과 처리 (Requirements 1.4)
+        if not results and not error:
+            logger.info(f"검색 결과 없음: '{query}'")
+            # 에러는 아니지만 빈 결과임을 알림
+            return [], None
+        
+        return results, error
+    
+    def _search_with_retry(
+        self,
+        query_embedding: List[float],
+        query_text: str,
+        top_k: int,
+        filters: Optional[Dict[str, str]] = None
+    ) -> Tuple[List[SearchResult], Optional[str]]:
+        """재시도 로직을 포함한 OpenSearch 검색 (Requirements 1.4)
+        
+        최대 3회 재시도하며, 지수 백오프를 적용합니다.
+        타임아웃 및 연결 에러를 처리합니다.
+        
+        Args:
+            query_embedding: 쿼리 임베딩 벡터
+            query_text: 원본 쿼리 텍스트
+            top_k: 반환할 최대 문서 수
+            filters: 필터 조건
             
-            # OpenSearch 검색 실행
-            response = self._opensearch_client.search(
-                index=self.opensearch_index,
-                body=search_query
-            )
+        Returns:
+            (검색 결과 목록, 에러 메시지) 튜플
+        """
+        last_error: Optional[Exception] = None
+        delay = RETRY_DELAY_SECONDS
+        
+        for attempt in range(1, MAX_RETRY_ATTEMPTS + 1):
+            try:
+                # 하이브리드 검색 쿼리 구성
+                search_query = self._build_search_query(
+                    query_embedding, query_text, top_k, filters
+                )
+                
+                # OpenSearch 검색 실행 (타임아웃 포함)
+                response = self._opensearch_client.search(
+                    index=self.opensearch_index,
+                    body=search_query,
+                    request_timeout=OPENSEARCH_TIMEOUT
+                )
+                
+                # 결과 파싱 (Requirements 1.3)
+                results = self._parse_search_results(response)
+                
+                if attempt > 1:
+                    logger.info(f"검색 성공 (시도 {attempt}/{MAX_RETRY_ATTEMPTS})")
+                
+                return results, None
+                
+            except Exception as e:
+                last_error = e
+                error_type = type(e).__name__
+                
+                # 재시도 불가능한 에러 확인
+                if self._is_search_non_retryable_error(e):
+                    error_msg = f"검색 실패 ({error_type}): {str(e)}"
+                    logger.error(error_msg)
+                    return [], error_msg
+                
+                # 마지막 시도가 아니면 대기 후 재시도
+                if attempt < MAX_RETRY_ATTEMPTS:
+                    logger.warning(
+                        f"검색 실패 (시도 {attempt}/{MAX_RETRY_ATTEMPTS}): "
+                        f"{error_type} - {e}. {delay}초 후 재시도..."
+                    )
+                    time.sleep(delay)
+                    delay *= RETRY_BACKOFF_MULTIPLIER  # 지수 백오프
+                else:
+                    error_msg = (
+                        f"검색 최종 실패 (시도 {attempt}/{MAX_RETRY_ATTEMPTS}): "
+                        f"{error_type} - {str(e)}"
+                    )
+                    logger.error(error_msg)
+                    return [], error_msg
+        
+        # 여기 도달하면 모든 재시도 실패
+        error_msg = f"검색 실패: {str(last_error)}" if last_error else "알 수 없는 오류"
+        return [], error_msg
+    
+    def _is_search_non_retryable_error(self, error: Exception) -> bool:
+        """재시도 불가능한 검색 에러인지 확인 (Requirements 1.4)
+        
+        Args:
+            error: 발생한 예외
             
-            # 결과 파싱 (Requirements 1.3)
-            results = self._parse_search_results(response)
-            return results
-            
-        except Exception as e:
-            logger.error(f"OpenSearch 검색 실패: {e}")
-            return []
+        Returns:
+            재시도 불가능 여부
+        """
+        error_str = str(error).lower()
+        error_type = type(error).__name__.lower()
+        
+        # 재시도 불가능한 에러 패턴
+        non_retryable_patterns = [
+            "indexnotfound",  # 인덱스 없음
+            "authenticationexception",  # 인증 실패
+            "authorizationexception",  # 권한 없음
+            "invalidindexname",  # 잘못된 인덱스명
+            "illegal_argument_exception",  # 잘못된 인자
+            "parsing_exception",  # 쿼리 파싱 실패
+        ]
+        
+        for pattern in non_retryable_patterns:
+            if pattern in error_str or pattern in error_type:
+                return True
+        
+        return False
 
     
     def _build_search_query(
@@ -399,24 +943,28 @@ handoff 규칙
         filters: Optional[Dict[str, str]] = None
     ) -> Dict[str, Any]:
         """하이브리드 검색 쿼리 구성
-        
+
         벡터 검색과 키워드 검색을 결합한 하이브리드 검색 쿼리를 생성합니다.
+        indexer.py의 인덱스 구조에 맞춤:
+        - embedding: knn_vector (1024차원)
+        - content: text
+        - table, database, chunk_type, column_name, source_file: keyword
         """
-        # 기본 k-NN 쿼리
+        # 기본 k-NN 쿼리 (필드명: embedding)
         knn_query = {
             "knn": {
-                "content_vector": {
+                "embedding": {
                     "vector": query_embedding,
                     "k": top_k
                 }
             }
         }
-        
-        # 키워드 검색 쿼리
+
+        # 키워드 검색 쿼리 (indexer.py 필드 구조에 맞춤)
         keyword_query = {
             "multi_match": {
                 "query": query_text,
-                "fields": ["content", "columns", "business_logic", "table_name"],
+                "fields": ["content", "table", "database", "column_name"],
                 "type": "best_fields",
                 "fuzziness": "AUTO"
             }
@@ -428,47 +976,51 @@ handoff 규칙
             "minimum_should_match": 1
         }
         
-        # 필터 추가
+        # 필터 추가 (indexer.py 필드 구조에 맞춤)
         if filters:
             filter_clauses = []
             if "database" in filters:
                 filter_clauses.append({"term": {"database": filters["database"]}})
-            if "table_name" in filters:
-                filter_clauses.append({"term": {"table_name": filters["table_name"]}})
+            if "table" in filters:
+                filter_clauses.append({"term": {"table": filters["table"]}})
             if filter_clauses:
                 bool_query["filter"] = filter_clauses
-        
+
         return {
             "size": top_k,
             "query": {"bool": bool_query},
-            "_source": ["content", "table_name", "database", "columns", "business_logic"]
+            "_source": ["content", "table", "database", "chunk_type", "column_name", "source_file"]
         }
     
     def _parse_search_results(self, response: Dict[str, Any]) -> List[SearchResult]:
-        """OpenSearch 응답을 SearchResult 목록으로 변환 (Requirements 1.3)"""
+        """OpenSearch 응답을 SearchResult 목록으로 변환 (Requirements 1.3)
+
+        indexer.py 필드 구조에 맞춤:
+        - content, table, database, chunk_type, column_name, source_file
+        """
         results = []
         hits = response.get("hits", {}).get("hits", [])
-        
+
         for hit in hits:
             source = hit.get("_source", {})
             score = hit.get("_score", 0.0)
-            
+
             # 점수 정규화 (0.0 ~ 1.0)
             normalized_score = min(score / 10.0, 1.0) if score else 0.0
-            
+
             result = SearchResult(
                 content=source.get("content", ""),
                 score=normalized_score,
                 metadata={
-                    "table_name": source.get("table_name", ""),
+                    "table": source.get("table", ""),
                     "database": source.get("database", ""),
-                    "columns": source.get("columns", ""),
-                    "business_logic": source.get("business_logic", "")
+                    "chunk_type": source.get("chunk_type", ""),
+                    "column_name": source.get("column_name", "")
                 },
-                source=hit.get("_id", "")
+                source=source.get("source_file", hit.get("_id", ""))
             )
             results.append(result)
-        
+
         return results
 
     
@@ -476,125 +1028,115 @@ handoff 규칙
     # Requirements 1.4: 빈 결과 처리 및 대안 제안
     # =========================================================================
     
-    def get_alternative_suggestions(self, query: str) -> List[str]:
+    def handle_empty_results(
+        self,
+        query: str,
+        filters: Optional[Dict[str, str]] = None
+    ) -> Dict[str, Any]:
+        """검색 결과가 없을 때 대안 제안 (Requirements 1.4)
+        
+        빈 결과에 대한 상세한 분석과 대안 검색 전략을 제공합니다.
+        
+        Args:
+            query: 원본 검색 쿼리
+            filters: 적용된 필터 조건
+            
+        Returns:
+            대안 제안 정보 딕셔너리
+        """
+        suggestions = self.get_alternative_suggestions(query, filters)
+        
+        return {
+            "empty_results": True,
+            "original_query": query,
+            "applied_filters": filters or {},
+            "suggestions": suggestions,
+            "message": (
+                f"'{query}'에 대한 검색 결과가 없습니다. "
+                f"다음 대안을 시도해보세요."
+            )
+        }
+    
+    def get_alternative_suggestions(
+        self,
+        query: str,
+        filters: Optional[Dict[str, str]] = None
+    ) -> List[Dict[str, str]]:
         """검색 결과가 없을 때 대안 검색어 제안 (Requirements 1.4)
         
         Args:
             query: 원본 검색 쿼리
+            filters: 적용된 필터 조건
             
         Returns:
-            대안 검색어 목록
+            대안 제안 목록 (각 제안은 type, suggestion, reason 포함)
         """
         suggestions = []
         
         # 쿼리 단어 분리
         words = query.lower().split()
         
-        # 개별 단어로 검색 제안
+        # 1. 필터 제거 제안
+        if filters:
+            suggestions.append({
+                "type": "remove_filters",
+                "suggestion": "필터 조건을 제거하고 검색",
+                "reason": f"현재 필터: {', '.join(f'{k}={v}' for k, v in filters.items())}"
+            })
+        
+        # 2. 개별 키워드 검색 제안
         if len(words) > 1:
-            suggestions.append(f"개별 키워드로 검색: {', '.join(words[:3])}")
+            key_words = [w for w in words if len(w) > 2][:3]
+            if key_words:
+                suggestions.append({
+                    "type": "split_keywords",
+                    "suggestion": f"개별 키워드로 검색: {', '.join(key_words)}",
+                    "reason": "복합 쿼리를 단순화하여 더 많은 결과 찾기"
+                })
         
-        # 일반적인 검색어 제안
-        common_terms = ["테이블", "스키마", "컬럼", "데이터베이스"]
-        for term in common_terms:
+        # 3. 일반적인 검색어 추가 제안
+        common_terms = {
+            "테이블": "데이터베이스 테이블 정보 검색",
+            "스키마": "데이터베이스 구조 정보 검색",
+            "컬럼": "테이블 컬럼 정보 검색",
+            "필드": "데이터 필드 정보 검색"
+        }
+        
+        for term, reason in common_terms.items():
             if term not in query.lower():
-                suggestions.append(f"'{term}' 키워드 추가하여 검색")
+                suggestions.append({
+                    "type": "add_keyword",
+                    "suggestion": f"'{term}' 키워드 추가: {query} {term}",
+                    "reason": reason
+                })
+                if len(suggestions) >= 5:  # 최대 5개 제안
+                    break
         
-        # 와일드카드 검색 제안
-        if len(words) > 0:
-            suggestions.append(f"유사 테이블명 검색: {words[0]}*")
+        # 4. 와일드카드 검색 제안
+        if len(words) > 0 and len(words[0]) > 2:
+            suggestions.append({
+                "type": "wildcard",
+                "suggestion": f"유사 이름 검색: {words[0]}*",
+                "reason": "부분 일치로 관련 테이블/컬럼 찾기"
+            })
         
-        return suggestions[:3]  # 최대 3개 제안
+        # 5. 전체 카탈로그 탐색 제안
+        if not suggestions or len(suggestions) < 3:
+            suggestions.append({
+                "type": "browse_all",
+                "suggestion": "전체 데이터베이스 카탈로그 탐색",
+                "reason": "사용 가능한 모든 테이블 목록 확인"
+            })
+        
+        return suggestions[:5]  # 최대 5개 제안
     
     # =========================================================================
-    # Requirements 1.5: 스키마 정보 구조화 추출
+    # Requirements 1.5: 스키마 정보 구조화 추출 (제거됨 - OpenSearch에 이미 구조화됨)
     # =========================================================================
-    
-    def extract_schema_info(self, documents: List[SearchResult]) -> List[SchemaInfo]:
-        """스키마 문서에서 구조화된 정보 추출 (Requirements 1.5)
-        
-        Args:
-            documents: 검색된 문서 목록
-            
-        Returns:
-            구조화된 스키마 정보 목록
-        """
-        schema_infos = []
-        
-        for doc in documents:
-            schema_info = self._parse_markdown_schema(doc)
-            if schema_info:
-                schema_infos.append(schema_info)
-        
-        return schema_infos
-    
-    def _parse_markdown_schema(self, doc: SearchResult) -> Optional[SchemaInfo]:
-        """Markdown 형식의 스키마 문서 파싱 (Requirements 1.5)"""
-        content = doc.content
-        metadata = doc.metadata
-        
-        # 테이블명과 데이터베이스명 추출
-        table_name = metadata.get("table_name", "")
-        database = metadata.get("database", "")
-        
-        # 컬럼 정보 파싱
-        columns = self._parse_columns_from_content(content)
-        
-        # 비즈니스 로직 추출
-        business_logic = metadata.get("business_logic", "")
-        
-        return SchemaInfo(
-            table_name=table_name,
-            database=database,
-            columns=columns,
-            description=content[:500] if content else "",
-            business_logic=business_logic,
-            source_doc=doc.source
-        )
-
-    
-    def _parse_columns_from_content(self, content: str) -> List[ColumnDetail]:
-        """컨텐츠에서 컬럼 정보 파싱"""
-        columns = []
-        
-        # Markdown 테이블 형식 파싱 시도
-        # | Column | Alias | Type | Description |
-        lines = content.split("\n")
-        in_table = False
-        header_found = False
-        
-        for line in lines:
-            line = line.strip()
-            
-            # 테이블 헤더 감지
-            if "|" in line and "Column" in line:
-                in_table = True
-                header_found = True
-                continue
-            
-            # 구분선 스킵
-            if in_table and line.startswith("|") and "-" in line:
-                continue
-            
-            # 테이블 행 파싱
-            if in_table and line.startswith("|"):
-                parts = [p.strip() for p in line.split("|")]
-                parts = [p for p in parts if p]  # 빈 문자열 제거
-                
-                if len(parts) >= 2:
-                    col = ColumnDetail(
-                        name=parts[0] if len(parts) > 0 else "",
-                        alias=parts[1] if len(parts) > 1 else "",
-                        type=parts[2] if len(parts) > 2 else "string",
-                        description=parts[3] if len(parts) > 3 else ""
-                    )
-                    columns.append(col)
-            
-            # 테이블 종료 감지
-            if in_table and header_found and not line.startswith("|") and line:
-                in_table = False
-        
-        return columns
+    # 발견: indexer.py가 이미 청킹 및 구조화 수행
+    # 결과: content 필드에 이미 파싱된 텍스트 포함
+    # 메타데이터: table, database, chunk_type, column_name 필드로 구조화됨
+    # 결론: LLM에 검색 결과를 그대로 전달하면 됨
     
     # =========================================================================
     # Requirements 2.1, 2.2, 2.3: 도메인 지식 검색
@@ -604,7 +1146,7 @@ handoff 규칙
         self,
         query: str,
         top_k: int = DEFAULT_TOP_K
-    ) -> List[SearchResult]:
+    ) -> Tuple[List[SearchResult], Optional[str]]:
         """도메인 지식 검색 (Requirements 2.1)
         
         비즈니스 용어, 메트릭 정의, 값 설명 등을 검색합니다.
@@ -614,40 +1156,66 @@ handoff 규칙
             top_k: 반환할 최대 문서 수
             
         Returns:
-            도메인 지식 검색 결과
+            (도메인 지식 검색 결과, 에러 메시지) 튜플
         """
         return self.search_documents(query, doc_type="domain", top_k=top_k)
     
-    def extract_domain_mappings(
+    def format_search_results_for_llm(
         self,
-        documents: List[SearchResult]
-    ) -> List[DomainMapping]:
-        """도메인 용어 매핑 추출 (Requirements 2.3)
+        search_results: List[SearchResult],
+        max_results: int = 5,
+        include_score: bool = True
+    ) -> str:
+        """검색 결과를 LLM 친화적 형식으로 변환 (Requirements 1.3, 2.5)
+        
+        검색 결과를 LLM이 이해하기 쉬운 마크다운 형식으로 변환합니다.
+        content와 메타데이터를 그대로 사용하며, 관련도 점수를 포함합니다.
         
         Args:
-            documents: 검색된 도메인 문서
+            search_results: 검색 결과 목록
+            max_results: 최대 표시할 결과 수 (기본 5개)
+            include_score: 관련도 점수 포함 여부 (기본 True)
             
         Returns:
-            도메인 용어 매핑 목록
+            LLM 친화적 형식의 문자열
         """
-        mappings = []
+        if not search_results:
+            return "검색 결과가 없습니다."
         
-        for doc in documents:
-            # 비즈니스 로직 섹션에서 매핑 추출
-            business_logic = doc.metadata.get("business_logic", "")
-            table_name = doc.metadata.get("table_name", "")
+        lines = ["# 검색된 문서\n"]
+        
+        for i, result in enumerate(search_results[:max_results], 1):
+            # 헤더: 순번 및 관련도 점수
+            if include_score:
+                lines.append(f"## {i}. 문서 (관련도: {result.score:.3f})\n")
+            else:
+                lines.append(f"## {i}. 문서\n")
             
-            # 간단한 매핑 추출 (실제로는 더 정교한 파싱 필요)
-            if business_logic:
-                mapping = DomainMapping(
-                    business_term=doc.content[:50] if doc.content else "",
-                    database_column=table_name,
-                    table=doc.metadata.get("database", ""),
-                    description=business_logic[:200] if business_logic else ""
-                )
-                mappings.append(mapping)
+            # 메타데이터 (indexer.py 필드 구조에 맞춤)
+            metadata = result.metadata
+            if metadata:
+                lines.append("**메타데이터:**")
+                if "database" in metadata and metadata["database"]:
+                    lines.append(f"- 데이터베이스: `{metadata['database']}`")
+                if "table" in metadata and metadata["table"]:
+                    lines.append(f"- 테이블: `{metadata['table']}`")
+                if "chunk_type" in metadata and metadata["chunk_type"]:
+                    lines.append(f"- 청크 타입: `{metadata['chunk_type']}`")
+                if "column_name" in metadata and metadata["column_name"]:
+                    lines.append(f"- 컬럼: `{metadata['column_name']}`")
+                lines.append("")
+            
+            # 문서 내용
+            lines.append("**내용:**")
+            lines.append(f"{result.content}\n")
+            
+            # 출처
+            if result.source:
+                lines.append(f"**출처:** `{result.source}`\n")
+            
+            lines.append("---\n")
         
-        return mappings
+        return "\n".join(lines)
 
     
     # =========================================================================
@@ -670,35 +1238,27 @@ handoff 규칙
         Returns:
             업데이트된 컨텍스트
         """
-        # AnalysisContext에 RAG 결과 필드가 있다면 저장
-        # 현재 AnalysisContext에는 해당 필드가 없으므로 
-        # business_intent에 임시 저장
-        rag_data = {}
-        
+        # 스키마 검색 결과를 context.add_rag_schema_result()로 저장
         if schema_results:
-            rag_data["rag_schema_results"] = [
-                {
-                    "content": r.content[:500],
-                    "score": r.score,
-                    "metadata": r.metadata,
-                    "source": r.source
+            for result in schema_results:
+                result_dict = {
+                    "content": result.content[:500],
+                    "score": result.score,
+                    "metadata": result.metadata,
+                    "source": result.source
                 }
-                for r in schema_results
-            ]
+                context.add_rag_schema_result(result_dict)
         
+        # 도메인 검색 결과를 context.add_rag_domain_result()로 저장
         if domain_results:
-            rag_data["rag_domain_results"] = [
-                {
-                    "content": r.content[:500],
-                    "score": r.score,
-                    "metadata": r.metadata,
-                    "source": r.source
+            for result in domain_results:
+                result_dict = {
+                    "content": result.content[:500],
+                    "score": result.score,
+                    "metadata": result.metadata,
+                    "source": result.source
                 }
-                for r in domain_results
-            ]
-        
-        if rag_data:
-            context.business_intent["rag_data"] = rag_data
+                context.add_rag_domain_result(result_dict)
         
         return context
     
@@ -766,7 +1326,10 @@ handoff 규칙
         query: str,
         context: Optional[AnalysisContext] = None
     ) -> Dict[str, Any]:
-        """검색 및 정보 추출 통합 메서드
+        """검색 및 정보 추출 통합 메서드 (Requirements 1.4, 3.5)
+        
+        스키마 문서와 도메인 지식을 검색합니다.
+        에러 발생 시 graceful degradation을 적용합니다.
         
         Args:
             query: 검색 쿼리
@@ -780,87 +1343,82 @@ handoff 규칙
             "rag_enabled": self._rag_enabled,
             "schema_results": [],
             "domain_results": [],
-            "schema_infos": [],
-            "domain_mappings": [],
-            "suggestions": []
+            "suggestions": [],
+            "errors": []
         }
         
+        # RAG 비활성화 상태 확인 (Requirements 3.5)
         if not self._rag_enabled:
             result["success"] = False
-            result["error"] = "RAG가 비활성화되어 있습니다"
+            result["errors"].append("RAG가 비활성화되어 있습니다")
+            logger.warning("RAG 비활성화 - 검색 건너뜀")
             return result
         
         try:
-            # 스키마 문서 검색
-            schema_results = self.search_documents(query, doc_type="schema")
-            result["schema_results"] = schema_results
+            # 스키마 문서 검색 (Requirements 1.2, 1.3, 1.4)
+            schema_results, schema_error = self.search_documents(
+                query, doc_type="schema"
+            )
             
-            # 스키마 정보 추출
-            if schema_results:
-                result["schema_infos"] = self.extract_schema_info(schema_results)
+            if schema_error:
+                result["errors"].append(f"스키마 검색 실패: {schema_error}")
+                logger.error(f"스키마 검색 실패: {schema_error}")
             else:
-                result["suggestions"] = self.get_alternative_suggestions(query)
+                result["schema_results"] = schema_results
+                
+                if schema_results:
+                    logger.info(f"스키마 문서 {len(schema_results)}개 검색")
+                else:
+                    # 빈 결과 처리 (Requirements 1.4)
+                    empty_result = self.handle_empty_results(query)
+                    result["suggestions"] = empty_result["suggestions"]
+                    logger.info(f"스키마 검색 결과 없음 - {len(result['suggestions'])}개 대안 제안")
             
-            # 도메인 지식 검색
-            domain_results = self.search_domain_knowledge(query)
-            result["domain_results"] = domain_results
+            # 도메인 지식 검색 (Requirements 2.1)
+            domain_results, domain_error = self.search_domain_knowledge(query)
             
-            # 도메인 매핑 추출
-            if domain_results:
-                result["domain_mappings"] = self.extract_domain_mappings(domain_results)
+            if domain_error:
+                result["errors"].append(f"도메인 검색 실패: {domain_error}")
+                logger.error(f"도메인 검색 실패: {domain_error}")
+            else:
+                result["domain_results"] = domain_results
+                
+                if domain_results:
+                    logger.info(f"도메인 문서 {len(domain_results)}개 검색")
             
-            # 컨텍스트에 저장
+            # 컨텍스트에 저장 (Requirements 3.4)
             if context:
                 self.save_to_context(context, schema_results, domain_results)
+                logger.debug("검색 결과를 공유 컨텍스트에 저장")
+            
+            # 전체 성공 여부 판단
+            result["success"] = len(result["errors"]) == 0
             
         except Exception as e:
-            logger.error(f"검색 및 추출 실패: {e}")
+            # 예상치 못한 에러 처리 (Requirements 3.5)
+            error_msg = f"검색 및 추출 중 예외 발생: {type(e).__name__} - {str(e)}"
+            logger.error(error_msg, exc_info=True)
             result["success"] = False
-            result["error"] = str(e)
+            result["errors"].append(error_msg)
         
         return result
 
     
     def format_results_for_agent(
         self,
-        schema_infos: List[SchemaInfo],
-        domain_mappings: List[DomainMapping]
+        search_results: List[SearchResult]
     ) -> str:
         """다른 에이전트에게 전달할 형식으로 결과 포맷팅
         
+        format_search_results_for_llm()을 사용하여 LLM 친화적 형식으로 변환합니다.
+        
         Args:
-            schema_infos: 스키마 정보 목록
-            domain_mappings: 도메인 매핑 목록
+            search_results: 검색 결과 목록
             
         Returns:
             포맷팅된 문자열
         """
-        lines = []
-        
-        # 스키마 정보
-        if schema_infos:
-            lines.append("## 검색된 스키마 정보")
-            for i, info in enumerate(schema_infos[:5], 1):
-                lines.append(f"\n### {i}. {info.database}.{info.table_name}")
-                if info.columns:
-                    col_strs = [f"{c.name} ({c.type})" for c in info.columns[:10]]
-                    lines.append(f"컬럼: {', '.join(col_strs)}")
-                if info.business_logic:
-                    lines.append(f"비즈니스 로직: {info.business_logic[:200]}")
-                lines.append(f"출처: {info.source_doc}")
-        
-        # 도메인 매핑
-        if domain_mappings:
-            lines.append("\n## 도메인 용어 매핑")
-            for mapping in domain_mappings[:5]:
-                lines.append(
-                    f"- {mapping.business_term} → "
-                    f"{mapping.table}.{mapping.database_column}"
-                )
-                if mapping.description:
-                    lines.append(f"  설명: {mapping.description[:100]}")
-        
-        return "\n".join(lines) if lines else "검색 결과가 없습니다."
+        return self.format_search_results_for_llm(search_results)
     
     def get_status(self) -> Dict[str, Any]:
         """RAG Agent 상태 정보 반환
@@ -875,7 +1433,7 @@ handoff 규칙
             "embedding_model": self.embedding_model,
             "opensearch_connected": self._opensearch_client is not None,
             "bedrock_connected": self._bedrock_client is not None,
-            "embedding_cache_size": len(self._embedding_cache)
+            "embedding_cache_stats": self._embedding_cache.get_stats()
         }
     
     def clear_embedding_cache(self) -> None:

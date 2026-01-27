@@ -128,13 +128,37 @@ class SQLAgent(BaseMultiAgent):
 입력: Data Expert가 제공한 테이블 정보 + 사용자 요청
 출력: 최적화된 SQL 실행 결과
 
-SQL 생성 규칙:
+────────────────────────────────────────────
+RAG Agent 활용 (선택적)
+────────────────────────────────────────────
+
+**도메인 지식 검색이 필요한 경우**:
+- 비즈니스 용어의 의미가 불명확할 때
+- 메트릭 계산 공식이 필요할 때
+- 값의 의미나 범위를 확인해야 할 때
+
+**RAG Agent 호출 방법**:
+handoff_to_agent(
+    agent_name="rag_agent",
+    message="도메인 지식 검색 요청: [비즈니스 용어]"
+)
+
+**RAG 검색 결과 활용**:
+- 비즈니스 용어 → 데이터베이스 컬럼 매핑
+- 메트릭 정의 및 계산 공식
+- 값 설명 및 필터 조건
+- RAG 실패 시에도 기존 워크플로우 계속 진행
+
+────────────────────────────────────────────
+SQL 생성 규칙
+────────────────────────────────────────────
 - SELECT 문만 허용 (DDL/DML 금지)
 - 제공된 컬럼명/타입 정확히 사용
 - 파티션 키 → WHERE 절에 필터 추가
 - 시간 범위 미지정 → 최근 30일 (CURRENT_DATE - INTERVAL '30' DAY)
 - 컬럼 별칭(AS)은 영문만 사용 (한글 금지)
 - LIMIT 1000 기본 적용
+- RAG 검색 결과의 도메인 지식 활용
 
 Athena 실행 설정:
 - Catalog: AwsDataCatalog
@@ -142,21 +166,24 @@ Athena 실행 설정:
 - output_location: {ATHENA_OUTPUT_LOCATION}
 
 실행 순서:
-1. start_query_execution → QueryExecutionId 획득
-2. get_query_execution → 상태 확인 (SUCCEEDED/FAILED 대기)
-3. get_query_results (max_results=1000)
+1. (선택) rag_agent로 도메인 지식 검색
+2. start_query_execution → QueryExecutionId 획득
+3. get_query_execution → 상태 확인 (SUCCEEDED/FAILED 대기)
+4. get_query_results (max_results=1000)
 
 필수 출력:
 [생성한 SQL]
 
 handoff 규칙:
 - data_expert: 테이블/컬럼 정보 부족 시
+- rag_agent: 도메인 지식 필요 시
 - lead_agent: 실행 완료 또는 복구 불가 오류 시
 
 오류 시 시도:
 1. 구문 오류 → SQL 수정 후 재실행
 2. 스키마 오류 → 컬럼명 확인 후 수정
 3. 2회 실패 → lead_agent에 보고
+RAG 실패 시 → 기존 워크플로우 계속 진행
 """
         
         return base_prompt

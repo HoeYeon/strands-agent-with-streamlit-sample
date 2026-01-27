@@ -1644,6 +1644,7 @@ source = { virtual = "." }
 dependencies = [
     { name = "awslabs-aws-dataprocessing-mcp-server" },
     { name = "boto3" },
+    { name = "python-dotenv" },
     { name = "strands-agents" },
     { name = "strands-agents-tools" },
     { name = "streamlit" },
@@ -1658,6 +1659,7 @@ dev = [
 requires-dist = [
     { name = "awslabs-aws-dataprocessing-mcp-server" },
     { name = "boto3", specifier = ">=1.40.39" },
+    { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "strands-agents", specifier = ">=1.15.0" },
     { name = "strands-agents-tools" },
     { name = "streamlit", specifier = ">=1.50.0" },

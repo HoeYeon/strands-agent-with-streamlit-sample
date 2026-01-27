@@ -288,6 +288,19 @@ pytest tests -v
 - All existing tests must pass
 - Write independent unit tests for each module
 
+## 📚 Documentation
+
+### RAG Agent Integration
+
+- **[OpenSearch Setup Guide](docs/OPENSEARCH_SETUP.md)**: OpenSearch 도메인 생성, 인덱스 설정, 접근 권한 구성 가이드
+- **[RAG Agent Usage Guide](docs/RAG_AGENT_USAGE.md)**: RAG Agent 초기화, 검색 쿼리, 에러 처리, 통합 예제
+
+### Specifications
+
+- **[RAG Agent Requirements](/.kiro/specs/rag-agent-integration/requirements.md)**: RAG Agent 기능 요구사항
+- **[RAG Agent Design](/.kiro/specs/rag-agent-integration/design.md)**: 아키텍처 및 설계 문서
+- **[RAG Agent Tasks](/.kiro/specs/rag-agent-integration/tasks.md)**: 구현 태스크 목록
+
 ## 📄 License
 
 This project is distributed under the MIT License.

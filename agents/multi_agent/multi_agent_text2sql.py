@@ -263,12 +263,6 @@ class MultiAgentText2SQL:
             tools=[]
         )
         
-        # RAG Agent 활성화 상태 로깅
-        if self.rag_agent.is_rag_enabled():
-            print(f"\n📚 [RAG Agent] 활성화됨 - OpenSearch: {opensearch_endpoint}", file=sys.stderr)
-        else:
-            print(f"\n📚 [RAG Agent] 비활성화됨 (OpenSearch 미설정 또는 연결 실패)", file=sys.stderr)
-        
         # 각 에이전트에 별도의 callback_handler 설정 (Requirements 5.3 - UI 이벤트 전달)
         # data_expert는 터미널에만 로깅하는 핸들러 사용
         self.lead_agent.agent.callback_handler = self._create_callback_handler("lead_agent")

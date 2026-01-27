@@ -642,5 +642,301 @@ class TestPerformanceAndTimeout:
         assert MAX_QUERY_RESULTS == 1000
 
 
+class TestRAGAgentIntegration:
+    """RAG Agent 통합 테스트 (Requirements 3.1, 3.2, 3.3, 3.4, 3.5)"""
+    
+    @pytest.fixture
+    def rag_agent(self):
+        """RAG Agent 인스턴스"""
+        from agents.multi_agent.rag_agent import RAGAgent
+        return RAGAgent(
+            model_id="test-model",
+            opensearch_endpoint="https://test.opensearch.com",
+            opensearch_index="test_index",
+            opensearch_username="test_user",
+            opensearch_password="test_pass"
+        )
+    
+    @pytest.fixture
+    def lead_agent_with_rag(self):
+        """RAG Agent가 포함된 Lead Agent"""
+        agent = LeadAgent.__new__(LeadAgent)
+        agent.workflow_state = WorkflowState()
+        return agent
+    
+    @pytest.fixture
+    def sample_context_with_rag(self):
+        """RAG 결과가 포함된 분석 컨텍스트"""
+        context = AnalysisContext(user_query="지난달 매출 상위 5개 상품")
+        context.rag_enabled = True
+        return context
+    
+    def test_rag_agent_swarm_registration(self, rag_agent):
+        """RAG Agent가 Swarm에 등록되는지 확인 (Requirements 3.1)"""
+        # RAG Agent가 BaseMultiAgent를 상속받아 get_agent() 메서드 제공
+        agent = rag_agent.get_agent()
+        
+        assert agent is not None
+        assert agent.name == "rag_agent"
+        assert agent.model is not None
+    
+    def test_workflow_with_rag_schema_search(self, sample_context_with_rag, rag_agent):
+        """사용자 쿼리 → RAG 스키마 검색 → 테이블 매칭 워크플로우 (Requirements 3.2)"""
+        from agents.multi_agent.rag_agent import SearchResult
+        
+        # RAG 스키마 검색 모킹
+        mock_schema_results = [
+            SearchResult(
+                content="Table: sales_transactions\nColumns: product_id, product_name, revenue, sale_date",
+                score=0.9,
+                metadata={
+                    "table_name": "sales_transactions",
+                    "database": "analytics",
+                    "columns": "product_id, product_name, revenue, sale_date"
+                },
+                source="sales_transactions.md"
+            )
+        ]
+        
+        with patch.object(
+            rag_agent,
+            'search_documents',
+            return_value=(mock_schema_results, None)
+        ):
+            # RAG 검색 수행
+            results, error = rag_agent.search_documents("매출 상품")
+            
+            assert error is None
+            assert len(results) == 1
+            assert results[0].metadata["table_name"] == "sales_transactions"
+            
+            # 컨텍스트에 저장
+            rag_agent.save_to_context(sample_context_with_rag, schema_results=results)
+            
+            # 컨텍스트에 RAG 결과가 저장되었는지 확인
+            assert len(sample_context_with_rag.rag_schema_results) == 1
+            assert sample_context_with_rag.rag_schema_results[0]["metadata"]["table_name"] == "sales_transactions"
+    
+    def test_workflow_with_rag_domain_search(self, sample_context_with_rag, rag_agent):
+        """사용자 쿼리 → RAG 도메인 검색 → SQL 생성 워크플로우 (Requirements 3.3)"""
+        from agents.multi_agent.rag_agent import SearchResult
+        
+        # RAG 도메인 검색 모킹
+        mock_domain_results = [
+            SearchResult(
+                content="매출(revenue): 상품 판매로 발생한 총 수익. 계산: SUM(price * quantity)",
+                score=0.85,
+                metadata={
+                    "business_term": "매출",
+                    "database_column": "revenue",
+                    "table": "sales_transactions"
+                },
+                source="business_terms.md"
+            )
+        ]
+        
+        with patch.object(
+            rag_agent,
+            'search_domain_knowledge',
+            return_value=(mock_domain_results, None)
+        ):
+            # RAG 도메인 검색 수행
+            results, error = rag_agent.search_domain_knowledge("매출")
+            
+            assert error is None
+            assert len(results) == 1
+            assert "revenue" in results[0].content
+            
+            # 컨텍스트에 저장
+            rag_agent.save_to_context(sample_context_with_rag, domain_results=results)
+            
+            # 컨텍스트에 RAG 결과가 저장되었는지 확인
+            assert len(sample_context_with_rag.rag_domain_results) == 1
+            assert "revenue" in sample_context_with_rag.rag_domain_results[0]["content"]
+    
+    def test_workflow_without_rag(self, sample_context_with_rag):
+        """RAG 없이 동작하는 워크플로우 (Requirements 3.5)"""
+        # RAG 비활성화
+        sample_context_with_rag.rag_enabled = False
+        
+        # Data Expert Agent는 RAG 없이도 동작해야 함
+        data_expert = DataExpertAgent(model_id="test-model")
+        
+        # 비즈니스 의도 설정
+        sample_context_with_rag.business_intent = {
+            "entity": "product",
+            "metric": "revenue"
+        }
+        
+        # 테이블 매칭 (RAG 없이)
+        mock_tables = [
+            {
+                "database": "analytics",
+                "name": "sales_transactions",
+                "columns": [
+                    {"name": "product_id", "type": "string"},
+                    {"name": "revenue", "type": "double"}
+                ]
+            }
+        ]
+        
+        matched = data_expert._match_tables_to_requirements(mock_tables, sample_context_with_rag)
+        
+        # RAG 없이도 테이블 매칭이 동작해야 함
+        assert len(matched) > 0
+        assert matched[0].table == "sales_transactions"
+    
+    def test_workflow_rag_failure_recovery(self, sample_context_with_rag, rag_agent):
+        """RAG 실패 시 복구 및 워크플로우 계속 (Requirements 3.5)"""
+        # RAG 검색 실패 모킹
+        with patch.object(
+            rag_agent,
+            'search_documents',
+            return_value=([], "OpenSearch 연결 실패")
+        ):
+            # RAG 검색 시도
+            results, error = rag_agent.search_documents("매출")
+            
+            # 실패 확인
+            assert error is not None
+            assert "실패" in error
+            assert len(results) == 0
+            
+            # RAG 비활성화
+            rag_agent.disable_rag("검색 실패")
+            assert rag_agent.is_rag_enabled() is False
+            
+            # 워크플로우는 계속 진행되어야 함
+            # (RAG 없이 Data Expert Agent가 동작)
+            data_expert = DataExpertAgent(model_id="test-model")
+            
+            mock_tables = [
+                {
+                    "database": "analytics",
+                    "name": "sales",
+                    "columns": [{"name": "revenue", "type": "double"}]
+                }
+            ]
+            
+            sample_context_with_rag.business_intent = {"metric": "revenue"}
+            matched = data_expert._match_tables_to_requirements(mock_tables, sample_context_with_rag)
+            
+            # RAG 실패해도 테이블 매칭은 동작
+            assert len(matched) > 0
+    
+    def test_shared_context_rag_results_propagation(self, sample_context_with_rag, rag_agent):
+        """공유 컨텍스트를 통한 RAG 결과 전파 (Requirements 3.4)"""
+        from agents.multi_agent.rag_agent import SearchResult
+        
+        # RAG 검색 결과 생성
+        schema_results = [
+            SearchResult(
+                content="Table: products",
+                score=0.9,
+                metadata={"table_name": "products", "database": "catalog"},
+                source="products.md"
+            )
+        ]
+        
+        domain_results = [
+            SearchResult(
+                content="상품(product): 판매 가능한 아이템",
+                score=0.85,
+                metadata={"business_term": "상품"},
+                source="terms.md"
+            )
+        ]
+        
+        # 컨텍스트에 저장
+        rag_agent.save_to_context(
+            sample_context_with_rag,
+            schema_results=schema_results,
+            domain_results=domain_results
+        )
+        
+        # 전파 확인
+        assert len(sample_context_with_rag.rag_schema_results) == 1
+        assert len(sample_context_with_rag.rag_domain_results) == 1
+        
+        # 다른 에이전트가 접근 가능
+        assert sample_context_with_rag.rag_schema_results[0]["metadata"]["table_name"] == "products"
+        assert "상품" in sample_context_with_rag.rag_domain_results[0]["content"]
+    
+    def test_end_to_end_with_rag(self, sample_context_with_rag, rag_agent):
+        """전체 End-to-End 워크플로우 (RAG 포함) (Requirements 3.1, 3.2, 3.3, 3.4)"""
+        from agents.multi_agent.rag_agent import SearchResult
+        
+        # 1단계: RAG 스키마 검색
+        mock_schema_results = [
+            SearchResult(
+                content="Table: sales\nColumns: product_id, revenue, sale_date",
+                score=0.9,
+                metadata={"table_name": "sales", "database": "analytics"},
+                source="sales.md"
+            )
+        ]
+        
+        # 2단계: RAG 도메인 검색
+        mock_domain_results = [
+            SearchResult(
+                content="매출: SUM(revenue)",
+                score=0.85,
+                metadata={"business_term": "매출", "database_column": "revenue"},
+                source="terms.md"
+            )
+        ]
+        
+        with patch.object(rag_agent, 'search_documents', return_value=(mock_schema_results, None)):
+            with patch.object(rag_agent, 'search_domain_knowledge', return_value=(mock_domain_results, None)):
+                # 통합 검색 수행
+                result = rag_agent.search_and_extract(
+                    "지난달 매출",
+                    context=sample_context_with_rag
+                )
+                
+                # 성공 확인
+                assert result["success"] is True
+                assert len(result["schema_results"]) == 1
+                assert len(result["domain_results"]) == 1
+                assert len(result["errors"]) == 0
+                
+                # 컨텍스트에 저장 확인
+                assert len(sample_context_with_rag.rag_schema_results) == 1
+                assert len(sample_context_with_rag.rag_domain_results) == 1
+        
+        # 3단계: Data Expert가 RAG 결과 활용
+        data_expert = DataExpertAgent(model_id="test-model")
+        
+        # RAG 결과를 기반으로 테이블 정보 구성
+        mock_tables = [
+            {
+                "database": "analytics",
+                "name": "sales",
+                "columns": [
+                    {"name": "product_id", "type": "string"},
+                    {"name": "revenue", "type": "double"},
+                    {"name": "sale_date", "type": "timestamp"}
+                ]
+            }
+        ]
+        
+        sample_context_with_rag.business_intent = {"metric": "revenue"}
+        matched = data_expert._match_tables_to_requirements(mock_tables, sample_context_with_rag)
+        
+        # 테이블 매칭 성공
+        assert len(matched) > 0
+        assert matched[0].table == "sales"
+        
+        # 4단계: SQL Agent가 RAG 도메인 지식 활용
+        sql_agent = SQLAgent(model_id="test-model")
+        
+        sample_context_with_rag.identified_tables = matched
+        result = sql_agent.generate_and_execute_sql(sample_context_with_rag)
+        
+        # SQL 생성 준비 완료
+        assert result["success"] is True
+        assert result["ready_for_execution"] is True
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

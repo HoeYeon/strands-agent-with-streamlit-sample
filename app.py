@@ -1,3 +1,5 @@
+from dotenv import load_dotenv
+load_dotenv()  # .env 파일에서 환경 변수 로드
 
 import streamlit as st
 from app.main import StreamlitChatApp

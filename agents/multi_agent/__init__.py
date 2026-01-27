@@ -16,9 +16,6 @@ from .sql_agent import SQLAgent
 from .rag_agent import (
     RAGAgent,
     SearchResult,
-    SchemaInfo,
-    ColumnDetail,
-    DomainMapping,
 )
 from .multi_agent_text2sql import MultiAgentText2SQL
 from .shared_context import AnalysisContext, TableInfo, ColumnInfo, SwarmConfig
@@ -44,9 +41,6 @@ __all__ = [
     "SwarmConfig",
     # RAG Agent 관련
     "SearchResult",
-    "SchemaInfo",
-    "ColumnDetail",
-    "DomainMapping",
     # Event Adapter
     "SwarmEventAdapter",
     "SwarmEventHandler",
