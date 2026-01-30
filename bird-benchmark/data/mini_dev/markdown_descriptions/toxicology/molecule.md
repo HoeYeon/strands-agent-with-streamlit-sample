@@ -1,6 +1,6 @@
 # Table: molecule
 
-**Database**: toxicology
+**Database**: ods
 
 ## Columns
 

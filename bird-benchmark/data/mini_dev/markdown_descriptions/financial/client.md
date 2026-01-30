@@ -1,6 +1,6 @@
 # Table: client
 
-**Database**: financial
+**Database**: ods
 
 ## Columns
 

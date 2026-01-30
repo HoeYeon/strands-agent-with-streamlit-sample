@@ -1,6 +1,6 @@
 # Table: gender
 
-**Database**: superhero
+**Database**: ods
 
 ## Columns
 

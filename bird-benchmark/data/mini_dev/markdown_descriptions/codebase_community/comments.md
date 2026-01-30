@@ -1,6 +1,6 @@
 # Table: comments
 
-**Database**: codebase_community
+**Database**: ods
 
 ## Columns
 

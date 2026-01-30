@@ -1,6 +1,6 @@
 # Table: colour
 
-**Database**: superhero
+**Database**: ods
 
 ## Columns
 

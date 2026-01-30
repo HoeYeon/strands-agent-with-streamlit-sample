@@ -1,6 +1,6 @@
 # Table: Team_Attributes
 
-**Database**: european_football_2
+**Database**: ods
 
 ## Columns
 

@@ -1,6 +1,6 @@
 # Table: postLinks
 
-**Database**: codebase_community
+**Database**: ods
 
 ## Columns
 

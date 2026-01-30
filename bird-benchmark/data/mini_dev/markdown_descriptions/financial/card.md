@@ -1,6 +1,6 @@
 # Table: card
 
-**Database**: financial
+**Database**: ods
 
 ## Columns
 

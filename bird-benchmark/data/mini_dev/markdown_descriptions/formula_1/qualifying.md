@@ -1,6 +1,6 @@
 # Table: qualifying
 
-**Database**: formula_1
+**Database**: ods
 
 ## Columns
 

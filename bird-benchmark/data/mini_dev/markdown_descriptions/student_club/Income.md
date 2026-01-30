@@ -1,6 +1,6 @@
 # Table: Income
 
-**Database**: student_club
+**Database**: ods
 
 ## Columns
 

@@ -39,7 +39,7 @@ def parse_markdown(file_path: Path) -> list[Chunk]:
     bl_section = re.search(r'## Business Logic & Value Descriptions\n\n(.+)', text, re.DOTALL)
     if bl_section:
         bl_text = bl_section.group(1)
-        col_sections = re.split(r'\n### ', bl_text)
+        col_sections = re.split(r'### ', bl_text)
         for section in col_sections:
             if not section.strip():
                 continue
@@ -120,6 +120,7 @@ def main():
     parser.add_argument('--index-name', default='bird-description')
     parser.add_argument('--region', default='us-east-1')
     parser.add_argument('--profile', default=None)
+    parser.add_argument('--recreate', action='store_true', help='기존 인덱스 삭제 후 재생성')
     args = parser.parse_args()
     
     session = boto3.Session(profile_name=args.profile)
@@ -175,7 +176,11 @@ def main():
     for md_file in input_path.rglob('*.md'):
         chunks.extend(parse_markdown(md_file))
     print(f"총 {len(chunks)}개 청크 생성")
-    
+
+    if args.recreate and client.indices.exists(index=args.index_name):
+        client.indices.delete(index=args.index_name)
+        print(f"인덱스 {args.index_name} 삭제됨")
+
     create_index(client, args.index_name)
     index_chunks(client, bedrock, chunks, args.index_name)
 

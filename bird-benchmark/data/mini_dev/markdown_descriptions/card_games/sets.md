@@ -1,6 +1,6 @@
 # Table: sets
 
-**Database**: card_games
+**Database**: ods
 
 ## Columns
 

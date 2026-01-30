@@ -1,6 +1,6 @@
 # Table: connected
 
-**Database**: toxicology
+**Database**: ods
 
 ## Columns
 

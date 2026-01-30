@@ -1,6 +1,6 @@
 # Table: loan
 
-**Database**: financial
+**Database**: ods
 
 ## Columns
 

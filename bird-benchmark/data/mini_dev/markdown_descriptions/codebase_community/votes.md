@@ -1,6 +1,6 @@
 # Table: votes
 
-**Database**: codebase_community
+**Database**: ods
 
 ## Columns
 

@@ -1,6 +1,6 @@
 # Table: Expense
 
-**Database**: student_club
+**Database**: ods
 
 ## Columns
 

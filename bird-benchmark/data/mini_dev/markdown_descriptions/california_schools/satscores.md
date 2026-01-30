@@ -1,6 +1,6 @@
 # Table: satscores
 
-**Database**: california_schools
+**Database**: ods
 
 ## Columns
 

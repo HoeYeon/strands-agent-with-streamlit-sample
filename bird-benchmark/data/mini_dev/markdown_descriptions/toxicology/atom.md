@@ -1,6 +1,6 @@
 # Table: atom
 
-**Database**: toxicology
+**Database**: ods
 
 ## Columns
 

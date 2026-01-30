@@ -1,6 +1,6 @@
 # Table: hero_attribute
 
-**Database**: superhero
+**Database**: ods
 
 ## Columns
 

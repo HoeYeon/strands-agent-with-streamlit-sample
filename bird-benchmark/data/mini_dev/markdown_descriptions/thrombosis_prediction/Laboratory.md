@@ -1,6 +1,6 @@
 # Table: Laboratory
 
-**Database**: thrombosis_prediction
+**Database**: ods
 
 ## Columns
 

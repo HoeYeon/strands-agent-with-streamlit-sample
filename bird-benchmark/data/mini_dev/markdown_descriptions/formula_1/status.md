@@ -1,6 +1,6 @@
 # Table: status
 
-**Database**: formula_1
+**Database**: ods
 
 ## Columns
 

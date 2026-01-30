@@ -1,6 +1,6 @@
 # Table: lapTimes
 
-**Database**: formula_1
+**Database**: ods
 
 ## Columns
 

@@ -1,6 +1,6 @@
 # Table: district
 
-**Database**: financial
+**Database**: ods
 
 ## Columns
 

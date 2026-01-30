@@ -1,6 +1,6 @@
 # Table: disp
 
-**Database**: financial
+**Database**: ods
 
 ## Columns
 

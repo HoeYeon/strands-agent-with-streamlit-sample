@@ -1,6 +1,6 @@
 # Table: Budget
 
-**Database**: student_club
+**Database**: ods
 
 ## Columns
 

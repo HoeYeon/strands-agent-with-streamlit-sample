@@ -1,6 +1,6 @@
 # Table: transactions_1k
 
-**Database**: debit_card_specializing
+**Database**: ods
 
 ## Columns
 

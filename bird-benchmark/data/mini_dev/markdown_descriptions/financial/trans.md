@@ -1,6 +1,6 @@
 # Table: trans
 
-**Database**: financial
+**Database**: ods
 
 ## Columns
 

@@ -1,6 +1,6 @@
 # Table: posts
 
-**Database**: codebase_community
+**Database**: ods
 
 ## Columns
 

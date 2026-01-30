@@ -1,6 +1,6 @@
 # Table: gasstations
 
-**Database**: debit_card_specializing
+**Database**: ods
 
 ## Columns
 

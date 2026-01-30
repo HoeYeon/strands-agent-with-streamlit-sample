@@ -1,6 +1,6 @@
 # Table: constructorStandings
 
-**Database**: formula_1
+**Database**: ods
 
 ## Columns
 

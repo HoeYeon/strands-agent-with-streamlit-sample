@@ -1,6 +1,6 @@
 # Table: Examination
 
-**Database**: thrombosis_prediction
+**Database**: ods
 
 ## Columns
 

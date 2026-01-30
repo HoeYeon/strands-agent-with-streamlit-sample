@@ -1,6 +1,6 @@
 # Table: publisher
 
-**Database**: superhero
+**Database**: ods
 
 ## Columns
 

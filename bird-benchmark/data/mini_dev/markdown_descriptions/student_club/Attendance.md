@@ -1,6 +1,6 @@
 # Table: Attendance
 
-**Database**: student_club
+**Database**: ods
 
 ## Columns
 

@@ -1,6 +1,6 @@
 # Table: hero_power
 
-**Database**: superhero
+**Database**: ods
 
 ## Columns
 

@@ -1,6 +1,6 @@
 # Table: bond
 
-**Database**: toxicology
+**Database**: ods
 
 ## Columns
 

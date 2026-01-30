@@ -1,6 +1,6 @@
 # Table: products
 
-**Database**: debit_card_specializing
+**Database**: ods
 
 ## Columns
 

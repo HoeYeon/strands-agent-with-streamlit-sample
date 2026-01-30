@@ -1,6 +1,6 @@
 # Table: tags
 
-**Database**: codebase_community
+**Database**: ods
 
 ## Columns
 

@@ -1,6 +1,6 @@
 # Table: race
 
-**Database**: superhero
+**Database**: ods
 
 ## Columns
 

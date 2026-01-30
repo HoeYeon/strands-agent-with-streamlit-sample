@@ -1,6 +1,6 @@
 # Table: badges
 
-**Database**: codebase_community
+**Database**: ods
 
 ## Columns
 

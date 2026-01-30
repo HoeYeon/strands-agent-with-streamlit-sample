@@ -1,6 +1,6 @@
 # Table: order
 
-**Database**: financial
+**Database**: ods
 
 ## Columns
 

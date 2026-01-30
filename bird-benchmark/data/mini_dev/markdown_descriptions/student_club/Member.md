@@ -1,6 +1,6 @@
 # Table: Member
 
-**Database**: student_club
+**Database**: ods
 
 ## Columns
 

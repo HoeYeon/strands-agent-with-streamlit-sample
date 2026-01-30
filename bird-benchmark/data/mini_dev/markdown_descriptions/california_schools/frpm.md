@@ -1,6 +1,6 @@
 # Table: frpm
 
-**Database**: california_schools
+**Database**: ods
 
 ## Columns
 

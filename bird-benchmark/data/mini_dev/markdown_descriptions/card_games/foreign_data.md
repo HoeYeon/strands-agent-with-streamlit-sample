@@ -1,6 +1,6 @@
 # Table: foreign_data
 
-**Database**: card_games
+**Database**: ods
 
 ## Columns
 

@@ -1,6 +1,6 @@
 # Table: Major
 
-**Database**: student_club
+**Database**: ods
 
 ## Columns
 

@@ -1,6 +1,6 @@
 # Table: Country
 
-**Database**: european_football_2
+**Database**: ods
 
 ## Columns
 

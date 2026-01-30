@@ -1,6 +1,6 @@
 # Table: Zip_Code
 
-**Database**: student_club
+**Database**: ods
 
 ## Columns
 

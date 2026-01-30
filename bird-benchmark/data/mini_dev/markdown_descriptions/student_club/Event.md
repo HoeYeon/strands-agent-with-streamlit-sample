@@ -1,6 +1,6 @@
 # Table: Event
 
-**Database**: student_club
+**Database**: ods
 
 ## Columns
 

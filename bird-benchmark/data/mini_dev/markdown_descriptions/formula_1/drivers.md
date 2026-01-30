@@ -1,6 +1,6 @@
 # Table: drivers
 
-**Database**: formula_1
+**Database**: ods
 
 ## Columns
 

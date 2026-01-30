@@ -1,6 +1,6 @@
 # Table: seasons
 
-**Database**: formula_1
+**Database**: ods
 
 ## Columns
 

@@ -1,6 +1,6 @@
 # Table: rulings
 
-**Database**: card_games
+**Database**: ods
 
 ## Columns
 

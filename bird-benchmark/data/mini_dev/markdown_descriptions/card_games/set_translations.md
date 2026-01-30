@@ -1,6 +1,6 @@
 # Table: set_translations
 
-**Database**: card_games
+**Database**: ods
 
 ## Columns
 

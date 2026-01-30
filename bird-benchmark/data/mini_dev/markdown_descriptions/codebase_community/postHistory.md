@@ -1,6 +1,6 @@
 # Table: postHistory
 
-**Database**: codebase_community
+**Database**: ods
 
 ## Columns
 
