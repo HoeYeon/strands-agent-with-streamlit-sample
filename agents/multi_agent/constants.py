@@ -15,10 +15,13 @@ DEFAULT_CATALOG = "AwsDataCatalog"
 DEFAULT_WORKGROUP = "primary"
 
 # Athena 출력 위치 (환경 변수에서 로드)
-ATHENA_OUTPUT_LOCATION = os.environ.get(
-    "ATHENA_OUTPUT_LOCATION",
-    "s3://aws-athena-query-results-hoeyeon/query-result/"
-)
+# 주의: ATHENA_OUTPUT_LOCATION 환경변수를 반드시 설정해야 합니다
+ATHENA_OUTPUT_LOCATION = os.environ.get("ATHENA_OUTPUT_LOCATION")
+if not ATHENA_OUTPUT_LOCATION:
+    raise EnvironmentError(
+        "ATHENA_OUTPUT_LOCATION 환경변수가 설정되지 않았습니다. "
+        "예: export ATHENA_OUTPUT_LOCATION=s3://your-athena-results-bucket"
+    )
 
 # =============================================================================
 # 쿼리 실행 설정 (Requirements 3.4, 3.5)

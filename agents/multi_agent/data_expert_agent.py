@@ -102,9 +102,11 @@ sql_agent 전달 형식 (필수)
 파티션 키: partition_col (타입)
 사용자 요청: {원래 요청}
 
-[RAG 검색 결과가 있으면 추가]
-스키마 문서:
-- {검색된 스키마 정보}
+[도메인 지식 - 필수 조건]
+- {비즈니스 용어}: {컬럼명} = '{값}'
+
+[컬럼 매핑]
+- {사용자 표현} → {실제 컬럼명}
 
 ────────────────────────────────────────────
 테이블 매칭 기준
@@ -139,65 +141,6 @@ RAG 실패 시 → 기존 워크플로우 계속 진행
         """
         self._catalog_info = catalog_info
         self._setup_agent()  # 새 컨텍스트로 에이전트 재초기화
-    
-    def get_catalog_info(self) -> str:
-        """현재 카탈로그 정보 반환 (테스트용)"""
-        return self._catalog_info
-
-
-    def _build_prompt_from_context(self, context: AnalysisContext) -> str:
-        """컨텍스트를 기반으로 Data Expert Agent 프롬프트 생성"""
-        prompt_parts = [
-            "비즈니스 요구사항 분석:",
-            f"사용자 요청: {context.user_query}",
-        ]
-        
-        if context.business_intent:
-            intent_parts = []
-            for key, value in context.business_intent.items():
-                if value:
-                    intent_parts.append(f"- {key}: {value}")
-            if intent_parts:
-                prompt_parts.append("파악된 의도:\n" + "\n".join(intent_parts))
-        
-        prompt_parts.extend([
-            "",
-            "수행할 작업:",
-            "1. AWS Athena 카탈로그에서 관련 데이터베이스 탐색",
-            "2. 비즈니스 요구사항에 맞는 테이블 식별 (최대 50개/DB)",
-            "3. 테이블 메타데이터 분석 및 적합성 판단",
-            "4. SQL 최적화를 위한 힌트 제공 (파티션 키, 날짜 컬럼)",
-            "",
-            "지금 데이터 탐색을 시작하세요."
-        ])
-        
-        return "\n".join(prompt_parts)
-    
-    def explore_catalog(self, context: AnalysisContext) -> Dict[str, Any]:
-        """데이터 카탈로그 탐색 및 테이블 식별 (LLM 기반)
-        
-        Requirements:
-        - 2.1: MCP 도구를 사용한 AWS Athena 카탈로그 조회
-        - 2.2: 최대 50개/DB 테이블 메타데이터 수집
-        - 2.3: LLM을 통한 테이블 적합성 판단
-        - 2.5: 파티션 키 및 최적화 힌트 제공
-        
-        실제 카탈로그 조회 및 테이블 선택은 Strands Agent가 MCP 도구를 통해 수행합니다.
-        """
-        try:
-            # 프롬프트 생성
-            prompt = self._build_prompt_from_context(context)
-            
-            return {
-                "success": True,
-                "context": context,
-                "prompt": prompt,
-                "ready_for_exploration": True
-            }
-            
-        except Exception as e:
-            context.add_error(f"데이터 카탈로그 탐색 실패: {str(e)}")
-            return {"success": False, "context": context, "error": str(e)}
     
     def process_catalog_results(
         self,
@@ -239,33 +182,6 @@ RAG 실패 시 → 기존 워크플로우 계속 진행
         except Exception as e:
             context.add_error(f"카탈로그 결과 처리 실패: {str(e)}")
             return {"success": False, "context": context, "error": str(e)}
-    
-    def _match_tables_to_requirements(
-        self, 
-        tables: List[Dict[str, Any]], 
-        context: AnalysisContext
-    ) -> List[TableInfo]:
-        """테이블 정보를 TableInfo 객체로 변환
-        
-        LLM 기반 방식에서는 LLM이 이미 적합한 테이블을 선택했으므로,
-        이 메서드는 단순히 데이터 변환만 수행합니다.
-        """
-        relevant_tables = []
-        
-        for table_data in tables:
-            columns = self._extract_column_info(table_data)
-            partition_keys = self._extract_partition_keys(table_data)
-            
-            table_info = TableInfo(
-                database=table_data.get("database", ""),
-                table=table_data.get("name", ""),
-                columns=columns,
-                partition_keys=partition_keys,
-                relevance_score=table_data.get("relevance_score", 0.8)
-            )
-            relevant_tables.append(table_info)
-        
-        return relevant_tables[:5]  # 상위 5개만 반환
     
     def _extract_column_info(self, table_data: Dict[str, Any]) -> List[ColumnInfo]:
         """테이블 데이터에서 컬럼 정보 추출"""

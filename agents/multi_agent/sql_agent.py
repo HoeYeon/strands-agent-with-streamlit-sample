@@ -150,15 +150,20 @@ handoff_to_agent(
 - RAG 실패 시에도 기존 워크플로우 계속 진행
 
 ────────────────────────────────────────────
-SQL 생성 규칙
+SQL 생성 규칙 (중요!)
 ────────────────────────────────────────────
+**RAG 도메인 지식 우선 원칙:**
+- RAG에서 제공한 조건/범위/값은 반드시 그대로 사용
+- 일반 상식이나 의학/비즈니스 상식보다 RAG 정보 우선
+- 예: RAG가 "정상 범위: N > 8.0"이라면, abnormal은 N <= 8.0
+
+**기본 규칙:**
 - SELECT 문만 허용 (DDL/DML 금지)
 - 제공된 컬럼명/타입 정확히 사용
 - 파티션 키 → WHERE 절에 필터 추가
 - 시간 범위 미지정 → 최근 30일 (CURRENT_DATE - INTERVAL '30' DAY)
 - 컬럼 별칭(AS)은 영문만 사용 (한글 금지)
 - LIMIT 1000 기본 적용
-- RAG 검색 결과의 도메인 지식 활용
 
 Athena 실행 설정:
 - Catalog: AwsDataCatalog
@@ -195,38 +200,6 @@ RAG 실패 시 → 기존 워크플로우 계속 진행
     def get_agent(self) -> Agent:
         """Swarm에서 사용할 Agent 인스턴스 반환"""
         return self.agent
-    
-    def _build_prompt_from_context(self, context: AnalysisContext) -> str:
-        """컨텍스트를 기반으로 SQL Agent 프롬프트 생성"""
-        # 카탈로그 정보 업데이트 (Requirements 3.1)
-        if context.identified_tables:
-            self.update_catalog_context(context.identified_tables)
-        
-        prompt_parts = [
-            f"SQL 생성 및 실행 요청:",
-            f"사용자 요청: {context.user_query}",
-        ]
-        
-        if context.business_intent:
-            intent_parts = []
-            for key, value in context.business_intent.items():
-                if value:
-                    intent_parts.append(f"- {key}: {value}")
-            if intent_parts:
-                prompt_parts.append("비즈니스 의도:\n" + "\n".join(intent_parts))
-        
-        prompt_parts.extend([
-            "",
-            "수행할 작업:",
-            "1. 사용자 요청의 비즈니스 의도를 파악하세요",
-            "2. 제공된 카탈로그 정보를 기반으로 최적화된 SQL 쿼리를 생성하세요",
-            "3. Athena에서 쿼리를 실행하고 결과를 조회하세요",
-            "",
-            "지금 SQL 생성 및 실행을 시작하세요."
-        ])
-        
-        return "\n".join(prompt_parts)
-
 
     # =========================================================================
     # Requirements 3.3: Athena 쿼리 실행 및 QueryExecutionId 저장
@@ -278,9 +251,6 @@ RAG 실패 시 → 기존 워크플로우 계속 진행
         self._latest_execution_id = execution_id
         self._polling_count = 0
     
-    def get_latest_execution_id(self) -> Optional[str]:
-        """저장된 최신 QueryExecutionId 반환"""
-        return self._latest_execution_id
     
     # =========================================================================
     # Requirements 3.4: 쿼리 실행 상태 모니터링 (5초 간격, 최대 5회)
@@ -330,13 +300,6 @@ RAG 실패 시 → 기존 워크플로우 계속 진행
             status="SUCCEEDED"
         )
     
-    def get_polling_count(self) -> int:
-        """현재 폴링 횟수 반환"""
-        return self._polling_count
-    
-    def is_within_polling_limit(self) -> bool:
-        """폴링 제한 내인지 확인 (Requirements 3.4)"""
-        return self._polling_count < MAX_POLLING_ATTEMPTS
     
     # =========================================================================
     # Requirements 3.5: 결과 조회 (최대 1000행)
@@ -391,50 +354,6 @@ RAG 실패 시 → 기존 워크플로우 계속 진행
         return "\n".join(lines)
 
 
-    # =========================================================================
-    # 통합 메서드: LLM 기반 SQL 생성 및 실행 워크플로우
-    # =========================================================================
-    
-    def generate_and_execute_sql(self, context: AnalysisContext) -> Dict[str, Any]:
-        """LLM 기반 SQL 생성 및 실행 전체 워크플로우
-        
-        Requirements 3.1~3.5를 모두 수행하는 통합 메서드입니다.
-        LLM이 카탈로그 정보를 기반으로 SQL을 생성합니다.
-        
-        Args:
-            context: 분석 컨텍스트
-            
-        Returns:
-            실행 결과 딕셔너리
-        """
-        try:
-            # 1. 카탈로그 정보를 시스템 프롬프트에 포함 (Requirements 3.1)
-            if not context.identified_tables:
-                context.add_error("SQL 생성을 위한 테이블 정보가 없습니다")
-                return {"success": False, "context": context}
-            
-            self.update_catalog_context(context.identified_tables)
-            
-            # 2. LLM을 통한 SQL 생성 프롬프트 구성 (Requirements 3.2)
-            prompt = self._build_prompt_from_context(context)
-            
-            # 3. 실행 준비 완료 상태 반환
-            # 실제 SQL 생성 및 실행은 Strands Agent가 수행
-            table = context.identified_tables[0]
-            
-            return {
-                "success": True,
-                "context": context,
-                "prompt": prompt,
-                "table": f"{table.database}.{table.table}",
-                "catalog_context": self._catalog_context,
-                "ready_for_execution": True
-            }
-            
-        except Exception as e:
-            context.add_error(f"SQL 생성 및 실행 실패: {str(e)}")
-            return {"success": False, "context": context, "error": str(e)}
-    
     def process_execution_result(
         self, 
         execution_id: str,
@@ -499,6 +418,3 @@ RAG 실패 시 → 기존 워크플로우 계속 진행
         
         return "\n".join(lines)
     
-    def get_catalog_context(self) -> str:
-        """현재 카탈로그 컨텍스트 반환 (테스트용)"""
-        return self._catalog_context

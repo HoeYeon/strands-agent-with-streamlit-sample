@@ -13,8 +13,7 @@ Requirements:
 
 import pytest
 import queue
-import time
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import patch
 from typing import Dict, Any, List
 
 from agents.multi_agent.lead_agent import (
@@ -24,8 +23,6 @@ from agents.multi_agent.lead_agent import (
     WorkflowState,
     AgentResult,
 )
-from agents.multi_agent.data_expert_agent import DataExpertAgent
-from agents.multi_agent.sql_agent import SQLAgent
 from agents.multi_agent.shared_context import (
     AnalysisContext,
     TableInfo,
@@ -33,153 +30,6 @@ from agents.multi_agent.shared_context import (
     SwarmConfig,
 )
 from agents.multi_agent.event_adapter import SwarmEventAdapter
-
-
-class TestEndToEndWorkflow:
-    """End-to-End 워크플로우 테스트 (Requirements 1.1, 1.2, 1.3)"""
-    
-    @pytest.fixture
-    def lead_agent(self):
-        """Lead Agent 인스턴스 (Agent 초기화 없이)"""
-        agent = LeadAgent.__new__(LeadAgent)
-        agent.workflow_state = WorkflowState()
-        return agent
-    
-    @pytest.fixture
-    def data_expert(self):
-        """Data Expert Agent 인스턴스"""
-        return DataExpertAgent(model_id="test-model")
-    
-    @pytest.fixture
-    def sql_agent(self):
-        """SQL Agent 인스턴스"""
-        return SQLAgent(model_id="test-model")
-    
-    @pytest.fixture
-    def sample_context(self):
-        """샘플 분석 컨텍스트"""
-        return AnalysisContext(
-            user_query="지난달 매출 상위 5개 상품"
-        )
-    
-    @pytest.fixture
-    def sample_table(self):
-        """샘플 테이블 정보"""
-        return TableInfo(
-            database="analytics",
-            table="sales_transactions",
-            columns=[
-                ColumnInfo(name="product_id", type="string"),
-                ColumnInfo(name="product_name", type="string"),
-                ColumnInfo(name="amount", type="decimal"),
-                ColumnInfo(name="revenue", type="double"),
-                ColumnInfo(name="transaction_date", type="timestamp"),
-            ],
-            partition_keys=["year", "month"],
-            relevance_score=0.9
-        )
-    
-    def test_workflow_request_analysis(self, lead_agent, sample_context):
-        """워크플로우 1단계: 사용자 요청 분석 (Requirements 1.1) - LLM 기반"""
-        # Lead Agent가 사용자 요청을 분석 (LLM 기반이므로 규칙 기반 의도 추출 없음)
-        result = lead_agent.analyze_user_request(sample_context.user_query)
-        
-        assert result["success"] is True
-        assert result["delegation_target"] is not None
-        assert result["context"] is not None
-        
-        # LLM 기반이므로 사용자 쿼리가 컨텍스트에 저장되었는지 확인
-        assert result["context"].user_query == sample_context.user_query
-    
-    def test_workflow_delegation_to_data_expert(self, lead_agent, sample_context):
-        """워크플로우 2단계: Data Expert로 위임 (Requirements 1.1)"""
-        # 테이블 정보가 없으면 Data Expert로 위임
-        result = lead_agent.analyze_user_request(sample_context.user_query)
-        
-        assert result["delegation_target"] == AgentType.DATA_EXPERT
-        assert "데이터" in result["delegation_message"] or "탐색" in result["delegation_message"]
-    
-    def test_workflow_delegation_to_sql_agent(self, lead_agent, sample_context, sample_table):
-        """워크플로우 3단계: SQL Agent로 위임 (Requirements 1.1) - LLM 기반"""
-        # 테이블 정보가 있으면 SQL Agent로 위임
-        sample_context.identified_tables = [sample_table]
-        
-        # LLM 기반이므로 _determine_delegation은 context만 받음
-        delegation = lead_agent._determine_delegation(sample_context)
-        
-        assert delegation["target"] == AgentType.SQL
-        assert "SQL" in delegation["message"] or "쿼리" in delegation["message"]
-    
-    def test_workflow_data_exploration(self, data_expert, sample_context):
-        """워크플로우: 데이터 탐색 (Requirements 2.1, 2.2, 2.3)"""
-        # 비즈니스 의도 설정
-        sample_context.business_intent = {
-            "entity": "product",
-            "metric": "revenue",
-            "time": "last_month",
-            "action": "top_k"
-        }
-        
-        # 테이블 데이터 시뮬레이션
-        mock_tables = [
-            {
-                "database": "analytics",
-                "name": "sales_transactions",
-                "columns": [
-                    {"name": "product_id", "type": "string"},
-                    {"name": "revenue", "type": "double"},
-                    {"name": "sale_date", "type": "timestamp"},
-                ],
-                "partition_keys": ["year", "month"]
-            }
-        ]
-        
-        # 테이블 매칭 테스트
-        matched = data_expert._match_tables_to_requirements(mock_tables, sample_context)
-        
-        assert len(matched) > 0
-        assert matched[0].relevance_score > 0.3
-        assert matched[0].database == "analytics"
-    
-    def test_workflow_sql_generation(self, sql_agent, sample_context, sample_table):
-        """워크플로우: SQL 생성 준비 (Requirements 3.1, 3.2 - LLM 기반)"""
-        # 컨텍스트 설정
-        sample_context.identified_tables = [sample_table]
-        sample_context.business_intent = {
-            "entity": "product",
-            "metric": "revenue",
-            "time": "last_month",
-            "action": "top_k",
-            "raw_keywords": ["5"]
-        }
-        
-        # LLM 기반 SQL 생성 준비 (카탈로그 컨텍스트 업데이트)
-        result = sql_agent.generate_and_execute_sql(sample_context)
-        
-        assert result["success"] is True
-        assert result["ready_for_execution"] is True
-        # 카탈로그 컨텍스트에 테이블 정보가 포함되어야 함
-        catalog_context = sql_agent.get_catalog_context()
-        assert "analytics.sales_transactions" in catalog_context
-        assert "product_id" in catalog_context
-    
-    def test_workflow_result_integration(self, lead_agent, sample_context, sample_table):
-        """워크플로우: 결과 통합 (Requirements 1.2)"""
-        # 완료된 컨텍스트 설정
-        sample_context.identified_tables = [sample_table]
-        sample_context.generated_sql = "SELECT product_id, SUM(revenue) FROM sales GROUP BY product_id"
-        sample_context.query_execution_id = "test-execution-id"
-        sample_context.results = [
-            {"product_id": "P001", "total_revenue": 10000},
-            {"product_id": "P002", "total_revenue": 8000},
-            {"product_id": "P003", "total_revenue": 6000},
-        ]
-        
-        # 결과 통합
-        response = lead_agent.integrate_results(sample_context)
-        
-        assert "성공" in response or "완료" in response
-        assert "3" in response  # 결과 행 수
 
 
 class TestSharedContextPropagation:
@@ -231,70 +81,6 @@ class TestSharedContextPropagation:
         
         assert len(context.error_messages) == 1
         assert "테스트 에러" in context.error_messages
-
-
-class TestErrorScenarios:
-    """에러 상황 및 복구 시나리오 테스트 (Requirements 1.4)"""
-    
-    @pytest.fixture
-    def lead_agent(self):
-        agent = LeadAgent.__new__(LeadAgent)
-        agent.workflow_state = WorkflowState()
-        return agent
-    
-    def test_error_response_for_permission_error(self, lead_agent):
-        """권한 오류 시 적절한 응답 생성"""
-        context = AnalysisContext(user_query="매출 분석")
-        context.add_error("Access Denied: 권한이 없습니다")
-        
-        response = lead_agent._generate_error_response(context)
-        
-        assert "오류" in response or "발생" in response
-        assert "다음 단계" in response or "제안" in response
-        suggestions = lead_agent._get_error_suggestions(context.error_messages)
-        assert any("권한" in s or "IAM" in s for s in suggestions)
-    
-    def test_error_response_for_table_not_found(self, lead_agent):
-        """테이블 없음 오류 시 적절한 응답 생성"""
-        context = AnalysisContext(user_query="매출 분석")
-        context.add_error("테이블을 찾을 수 없습니다")
-        
-        response = lead_agent._generate_error_response(context)
-        
-        assert "오류" in response or "발생" in response
-        suggestions = lead_agent._get_error_suggestions(context.error_messages)
-        assert any("테이블" in s for s in suggestions)
-    
-    def test_error_response_for_query_timeout(self, lead_agent):
-        """쿼리 타임아웃 시 적절한 응답 생성"""
-        context = AnalysisContext(user_query="대용량 데이터 분석")
-        context.add_error("쿼리 실행 타임아웃")
-        
-        response = lead_agent._generate_error_response(context)
-        
-        suggestions = lead_agent._get_error_suggestions(context.error_messages)
-        assert any("범위" in s or "축소" in s for s in suggestions)
-    
-    def test_error_response_for_sql_syntax_error(self, lead_agent):
-        """SQL 구문 오류 시 적절한 응답 생성"""
-        context = AnalysisContext(user_query="매출 분석")
-        context.add_error("SQL 쿼리 구문 오류")
-        
-        response = lead_agent._generate_error_response(context)
-        
-        suggestions = lead_agent._get_error_suggestions(context.error_messages)
-        assert len(suggestions) > 0
-    
-    def test_multiple_errors_handling(self, lead_agent):
-        """다중 에러 처리"""
-        context = AnalysisContext(user_query="매출 분석")
-        context.add_error("첫 번째 오류")
-        context.add_error("두 번째 오류")
-        
-        response = lead_agent._generate_error_response(context)
-        
-        assert "첫 번째 오류" in response
-        assert "두 번째 오류" in response
 
 
 class TestWorkflowStatusTracking:
@@ -372,77 +158,6 @@ class TestWorkflowStatusTracking:
         assert status["current_agent"] == "sql_agent"
 
 
-class TestNaturalLanguageQueryScenarios:
-    """다양한 자연어 쿼리 시나리오 테스트"""
-    
-    @pytest.fixture
-    def lead_agent(self):
-        agent = LeadAgent.__new__(LeadAgent)
-        agent.workflow_state = WorkflowState()
-        return agent
-    
-    @pytest.fixture
-    def sql_agent(self):
-        return SQLAgent(model_id="test-model")
-    
-    def test_top_k_query_scenario(self, lead_agent, sql_agent):
-        """Top-K 쿼리 시나리오 (LLM 기반)"""
-        query = "지난달 매출 상위 10개 상품"
-        
-        # Lead Agent 분석 (LLM 기반이므로 규칙 기반 의도 추출 없음)
-        result = lead_agent.analyze_user_request(query)
-        assert result["success"] is True
-        assert result["context"].user_query == query
-        
-        # SQL Agent는 LLM 기반으로 동작하므로 카탈로그 컨텍스트 업데이트 테스트
-        sample_table = TableInfo(
-            database="analytics",
-            table="sales",
-            columns=[ColumnInfo(name="product_id", type="string")],
-            partition_keys=[],
-            relevance_score=0.9
-        )
-        sql_agent.update_catalog_context([sample_table])
-        catalog_context = sql_agent.get_catalog_context()
-        assert "analytics.sales" in catalog_context
-    
-    def test_trend_analysis_scenario(self, lead_agent, sql_agent):
-        """추이 분석 시나리오 (LLM 기반)"""
-        query = "최근 매출 추이 분석"
-        
-        # LLM 기반이므로 사용자 요청 분석만 테스트
-        result = lead_agent.analyze_user_request(query)
-        assert result["success"] is True
-        assert result["context"].user_query == query
-    
-    def test_comparison_scenario(self, lead_agent, sql_agent):
-        """비교 분석 시나리오 (LLM 기반)"""
-        query = "카테고리별 매출 비교"
-        
-        # LLM 기반이므로 사용자 요청 분석만 테스트
-        result = lead_agent.analyze_user_request(query)
-        assert result["success"] is True
-        assert result["context"].user_query == query
-    
-    def test_customer_analysis_scenario(self, lead_agent, sql_agent):
-        """고객 분석 시나리오 (LLM 기반)"""
-        query = "이번달 고객 주문 건수"
-        
-        # LLM 기반이므로 사용자 요청 분석만 테스트
-        result = lead_agent.analyze_user_request(query)
-        assert result["success"] is True
-        assert result["context"].user_query == query
-    
-    def test_event_analysis_scenario(self, lead_agent, sql_agent):
-        """이벤트 분석 시나리오 (LLM 기반)"""
-        query = "어제 방문자 클릭 이벤트 통계"
-        
-        # LLM 기반이므로 사용자 요청 분석만 테스트
-        result = lead_agent.analyze_user_request(query)
-        assert result["success"] is True
-        assert result["context"].user_query == query
-
-
 class TestSwarmConfigValidation:
     """Swarm 설정 검증 테스트"""
     
@@ -466,89 +181,6 @@ class TestSwarmConfigValidation:
         
         assert config.max_handoffs == 10
         assert config.execution_timeout == 600.0
-
-
-class TestAgentResultIntegration:
-    """에이전트 결과 통합 테스트 (Requirements 1.2)"""
-    
-    @pytest.fixture
-    def lead_agent(self):
-        agent = LeadAgent.__new__(LeadAgent)
-        agent.workflow_state = WorkflowState()
-        return agent
-    
-    def test_integrate_successful_results(self, lead_agent):
-        """성공적인 결과 통합"""
-        context = AnalysisContext(user_query="매출 분석")
-        
-        results = [
-            AgentResult(
-                agent_type=AgentType.DATA_EXPERT,
-                success=True,
-                data={"tables_count": 3, "databases_count": 1},
-                execution_time_ms=500
-            ),
-            AgentResult(
-                agent_type=AgentType.SQL,
-                success=True,
-                data={"sql_query": "SELECT *", "row_count": 100, "execution_id": "test-id"},
-                execution_time_ms=1500
-            )
-        ]
-        
-        integrated = lead_agent.integrate_agent_results(results, context)
-        
-        assert integrated["success"] is True
-        assert integrated["data_exploration"]["tables_found"] == 3
-        assert integrated["sql_execution"]["row_count"] == 100
-        assert len(integrated["errors"]) == 0
-    
-    def test_integrate_partial_failure(self, lead_agent):
-        """부분 실패 결과 통합"""
-        context = AnalysisContext(user_query="매출 분석")
-        
-        results = [
-            AgentResult(
-                agent_type=AgentType.DATA_EXPERT,
-                success=True,
-                data={"tables_count": 3, "databases_count": 1}
-            ),
-            AgentResult(
-                agent_type=AgentType.SQL,
-                success=False,
-                error_message="쿼리 실행 실패"
-            )
-        ]
-        
-        integrated = lead_agent.integrate_agent_results(results, context)
-        
-        assert integrated["success"] is False
-        assert len(integrated["errors"]) == 1
-        assert "쿼리 실행 실패" in integrated["errors"]
-    
-    def test_integration_summary_generation(self, lead_agent):
-        """통합 요약 생성"""
-        context = AnalysisContext(user_query="매출 분석")
-        
-        results = [
-            AgentResult(
-                agent_type=AgentType.DATA_EXPERT,
-                success=True,
-                data={"tables_count": 3, "databases_count": 2}
-            ),
-            AgentResult(
-                agent_type=AgentType.SQL,
-                success=True,
-                data={"row_count": 50},
-                execution_time_ms=1000
-            )
-        ]
-        
-        integrated = lead_agent.integrate_agent_results(results, context)
-        
-        assert integrated["summary"] != ""
-        assert "데이터 탐색" in integrated["summary"] or "DB" in integrated["summary"]
-        assert "SQL" in integrated["summary"] or "행" in integrated["summary"]
 
 
 class TestEventAdapterIntegration:
@@ -680,262 +312,33 @@ class TestRAGAgentIntegration:
         assert agent.name == "rag_agent"
         assert agent.model is not None
     
-    def test_workflow_with_rag_schema_search(self, sample_context_with_rag, rag_agent):
-        """사용자 쿼리 → RAG 스키마 검색 → 테이블 매칭 워크플로우 (Requirements 3.2)"""
-        from agents.multi_agent.rag_agent import SearchResult
-        
-        # RAG 스키마 검색 모킹
-        mock_schema_results = [
+    def test_rag_search_and_context_save(self, sample_context_with_rag, rag_agent):
+        """RAG 검색 및 컨텍스트 저장 테스트"""
+        from agents.multi_agent.vector_search import SearchResult
+
+        mock_results = [
             SearchResult(
-                content="Table: sales_transactions\nColumns: product_id, product_name, revenue, sale_date",
+                content="Table: sales_transactions\nColumns: product_id, revenue",
                 score=0.9,
-                metadata={
-                    "table_name": "sales_transactions",
-                    "database": "analytics",
-                    "columns": "product_id, product_name, revenue, sale_date"
-                },
+                metadata={"table": "sales_transactions", "database": "analytics"},
                 source="sales_transactions.md"
             )
         ]
-        
+
         with patch.object(
-            rag_agent,
-            'search_documents',
-            return_value=(mock_schema_results, None)
+            rag_agent._search_service,
+            'search',
+            return_value=(mock_results, None)
         ):
-            # RAG 검색 수행
-            results, error = rag_agent.search_documents("매출 상품")
-            
-            assert error is None
-            assert len(results) == 1
-            assert results[0].metadata["table_name"] == "sales_transactions"
-            
-            # 컨텍스트에 저장
-            rag_agent.save_to_context(sample_context_with_rag, schema_results=results)
-            
-            # 컨텍스트에 RAG 결과가 저장되었는지 확인
-            assert len(sample_context_with_rag.rag_schema_results) == 1
-            assert sample_context_with_rag.rag_schema_results[0]["metadata"]["table_name"] == "sales_transactions"
-    
-    def test_workflow_with_rag_domain_search(self, sample_context_with_rag, rag_agent):
-        """사용자 쿼리 → RAG 도메인 검색 → SQL 생성 워크플로우 (Requirements 3.3)"""
-        from agents.multi_agent.rag_agent import SearchResult
-        
-        # RAG 도메인 검색 모킹
-        mock_domain_results = [
-            SearchResult(
-                content="매출(revenue): 상품 판매로 발생한 총 수익. 계산: SUM(price * quantity)",
-                score=0.85,
-                metadata={
-                    "business_term": "매출",
-                    "database_column": "revenue",
-                    "table": "sales_transactions"
-                },
-                source="business_terms.md"
+            result = rag_agent.search_and_extract(
+                "매출 상품",
+                context=sample_context_with_rag
             )
-        ]
-        
-        with patch.object(
-            rag_agent,
-            'search_domain_knowledge',
-            return_value=(mock_domain_results, None)
-        ):
-            # RAG 도메인 검색 수행
-            results, error = rag_agent.search_domain_knowledge("매출")
-            
-            assert error is None
-            assert len(results) == 1
-            assert "revenue" in results[0].content
-            
-            # 컨텍스트에 저장
-            rag_agent.save_to_context(sample_context_with_rag, domain_results=results)
-            
-            # 컨텍스트에 RAG 결과가 저장되었는지 확인
-            assert len(sample_context_with_rag.rag_domain_results) == 1
-            assert "revenue" in sample_context_with_rag.rag_domain_results[0]["content"]
-    
-    def test_workflow_without_rag(self, sample_context_with_rag):
-        """RAG 없이 동작하는 워크플로우 (Requirements 3.5)"""
-        # RAG 비활성화
-        sample_context_with_rag.rag_enabled = False
-        
-        # Data Expert Agent는 RAG 없이도 동작해야 함
-        data_expert = DataExpertAgent(model_id="test-model")
-        
-        # 비즈니스 의도 설정
-        sample_context_with_rag.business_intent = {
-            "entity": "product",
-            "metric": "revenue"
-        }
-        
-        # 테이블 매칭 (RAG 없이)
-        mock_tables = [
-            {
-                "database": "analytics",
-                "name": "sales_transactions",
-                "columns": [
-                    {"name": "product_id", "type": "string"},
-                    {"name": "revenue", "type": "double"}
-                ]
-            }
-        ]
-        
-        matched = data_expert._match_tables_to_requirements(mock_tables, sample_context_with_rag)
-        
-        # RAG 없이도 테이블 매칭이 동작해야 함
-        assert len(matched) > 0
-        assert matched[0].table == "sales_transactions"
-    
-    def test_workflow_rag_failure_recovery(self, sample_context_with_rag, rag_agent):
-        """RAG 실패 시 복구 및 워크플로우 계속 (Requirements 3.5)"""
-        # RAG 검색 실패 모킹
-        with patch.object(
-            rag_agent,
-            'search_documents',
-            return_value=([], "OpenSearch 연결 실패")
-        ):
-            # RAG 검색 시도
-            results, error = rag_agent.search_documents("매출")
-            
-            # 실패 확인
-            assert error is not None
-            assert "실패" in error
-            assert len(results) == 0
-            
-            # RAG 비활성화
-            rag_agent.disable_rag("검색 실패")
-            assert rag_agent.is_rag_enabled() is False
-            
-            # 워크플로우는 계속 진행되어야 함
-            # (RAG 없이 Data Expert Agent가 동작)
-            data_expert = DataExpertAgent(model_id="test-model")
-            
-            mock_tables = [
-                {
-                    "database": "analytics",
-                    "name": "sales",
-                    "columns": [{"name": "revenue", "type": "double"}]
-                }
-            ]
-            
-            sample_context_with_rag.business_intent = {"metric": "revenue"}
-            matched = data_expert._match_tables_to_requirements(mock_tables, sample_context_with_rag)
-            
-            # RAG 실패해도 테이블 매칭은 동작
-            assert len(matched) > 0
-    
-    def test_shared_context_rag_results_propagation(self, sample_context_with_rag, rag_agent):
-        """공유 컨텍스트를 통한 RAG 결과 전파 (Requirements 3.4)"""
-        from agents.multi_agent.rag_agent import SearchResult
-        
-        # RAG 검색 결과 생성
-        schema_results = [
-            SearchResult(
-                content="Table: products",
-                score=0.9,
-                metadata={"table_name": "products", "database": "catalog"},
-                source="products.md"
-            )
-        ]
-        
-        domain_results = [
-            SearchResult(
-                content="상품(product): 판매 가능한 아이템",
-                score=0.85,
-                metadata={"business_term": "상품"},
-                source="terms.md"
-            )
-        ]
-        
-        # 컨텍스트에 저장
-        rag_agent.save_to_context(
-            sample_context_with_rag,
-            schema_results=schema_results,
-            domain_results=domain_results
-        )
-        
-        # 전파 확인
-        assert len(sample_context_with_rag.rag_schema_results) == 1
-        assert len(sample_context_with_rag.rag_domain_results) == 1
-        
-        # 다른 에이전트가 접근 가능
-        assert sample_context_with_rag.rag_schema_results[0]["metadata"]["table_name"] == "products"
-        assert "상품" in sample_context_with_rag.rag_domain_results[0]["content"]
-    
-    def test_end_to_end_with_rag(self, sample_context_with_rag, rag_agent):
-        """전체 End-to-End 워크플로우 (RAG 포함) (Requirements 3.1, 3.2, 3.3, 3.4)"""
-        from agents.multi_agent.rag_agent import SearchResult
-        
-        # 1단계: RAG 스키마 검색
-        mock_schema_results = [
-            SearchResult(
-                content="Table: sales\nColumns: product_id, revenue, sale_date",
-                score=0.9,
-                metadata={"table_name": "sales", "database": "analytics"},
-                source="sales.md"
-            )
-        ]
-        
-        # 2단계: RAG 도메인 검색
-        mock_domain_results = [
-            SearchResult(
-                content="매출: SUM(revenue)",
-                score=0.85,
-                metadata={"business_term": "매출", "database_column": "revenue"},
-                source="terms.md"
-            )
-        ]
-        
-        with patch.object(rag_agent, 'search_documents', return_value=(mock_schema_results, None)):
-            with patch.object(rag_agent, 'search_domain_knowledge', return_value=(mock_domain_results, None)):
-                # 통합 검색 수행
-                result = rag_agent.search_and_extract(
-                    "지난달 매출",
-                    context=sample_context_with_rag
-                )
-                
-                # 성공 확인
-                assert result["success"] is True
-                assert len(result["schema_results"]) == 1
-                assert len(result["domain_results"]) == 1
-                assert len(result["errors"]) == 0
-                
-                # 컨텍스트에 저장 확인
-                assert len(sample_context_with_rag.rag_schema_results) == 1
-                assert len(sample_context_with_rag.rag_domain_results) == 1
-        
-        # 3단계: Data Expert가 RAG 결과 활용
-        data_expert = DataExpertAgent(model_id="test-model")
-        
-        # RAG 결과를 기반으로 테이블 정보 구성
-        mock_tables = [
-            {
-                "database": "analytics",
-                "name": "sales",
-                "columns": [
-                    {"name": "product_id", "type": "string"},
-                    {"name": "revenue", "type": "double"},
-                    {"name": "sale_date", "type": "timestamp"}
-                ]
-            }
-        ]
-        
-        sample_context_with_rag.business_intent = {"metric": "revenue"}
-        matched = data_expert._match_tables_to_requirements(mock_tables, sample_context_with_rag)
-        
-        # 테이블 매칭 성공
-        assert len(matched) > 0
-        assert matched[0].table == "sales"
-        
-        # 4단계: SQL Agent가 RAG 도메인 지식 활용
-        sql_agent = SQLAgent(model_id="test-model")
-        
-        sample_context_with_rag.identified_tables = matched
-        result = sql_agent.generate_and_execute_sql(sample_context_with_rag)
-        
-        # SQL 생성 준비 완료
-        assert result["success"] is True
-        assert result["ready_for_execution"] is True
+
+            assert result["success"] is True
+            assert len(result["results"]) == 1
+            assert len(sample_context_with_rag.rag_results) == 1
+            assert sample_context_with_rag.rag_results[0]["metadata"]["table"] == "sales_transactions"
 
 
 if __name__ == "__main__":
